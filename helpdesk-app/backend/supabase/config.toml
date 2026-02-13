@@ -1,0 +1,23 @@
+# Minimal config for Supabase CLI (link + db push).
+# Run from helpdesk-app/backend: supabase link then supabase db push
+project_id = "helpdesk-app"
+
+[db.migrations]
+enabled = true
+
+# Allow these functions to receive requests; we validate the Bearer token inside each function.
+# (Gateway JWT verification can 401 preflight OPTIONS before the request reaches the handler.)
+[functions.oauth-gmail-callback]
+verify_jwt = false
+
+[functions.sync-gmail-emails]
+verify_jwt = false
+
+[functions.send-gmail-reply]
+verify_jwt = false
+
+[functions.send-gmail-forward]
+verify_jwt = false
+
+[functions.send-invitation-email]
+verify_jwt = false

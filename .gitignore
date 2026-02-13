@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# Env (never commit secrets)
+.env
+.env.local
+.env.*.local
+
+# Build
+dist/
+build/
+
+# Supabase
+helpdesk-app/backend/supabase/.branches
+helpdesk-app/backend/supabase/.temp
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.log
+
+# Vercel
+.vercel

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Message, MessageAttachment } from '../../types/message';
 import { formatDateTime } from '../../utils/formatters';
 import { getMessageDisplayHtml } from '../../utils/sanitizeHtml';
@@ -30,7 +30,50 @@ function isMessageAttachment(a: unknown): a is MessageAttachment {
 
 function isImageAttachment(a: MessageAttachment): boolean {
   const mime = (a.mime_type || '').toLowerCase();
-  return mime.startsWith('image/');
+  if (mime.startsWith('image/')) return true;
+  const name = (a.filename || '').toLowerCase();
+  return /\.(png|jpe?g|gif|webp|bmp|svg|ico)(\?|$)/i.test(name);
+}
+
+/** Normalize storage path for consistent lookup (trim, no leading/trailing slashes). */
+function normalizeStoragePath(p: string): string {
+  return String(p).trim().replace(/^\/+|\/+$/g, '');
+}
+
+/** 1x1 transparent GIF so we don't request the private storage URL before we have a blob. */
+const PLACEHOLDER_IMG_SRC = 'data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==';
+
+/**
+ * Rewrite img src in message HTML that point to private ticket-attachments storage
+ * to use our blob URLs so they load. Replaces unknown paths with a placeholder
+ * so the browser never requests the private URL (which returns 400).
+ */
+function rewriteMessageHtmlImageUrls(html: string, pathToUrl: Record<string, string>): string {
+  if (!html) return html;
+  // 1) Match <img ... src="...ticket-attachments/..." ...> and replace src with blob URL or placeholder
+  let out = html.replace(
+    /<img\s([^>]*?)src\s*=\s*["']([^"']*ticket-attachments\/([^"']+?))["']([^>]*)>/gi,
+    (_match, before, _fullUrl, pathSegment, after) => {
+      try {
+        const path = normalizeStoragePath(decodeURIComponent(pathSegment));
+        const blobUrl = pathToUrl[path];
+        const src = blobUrl || PLACEHOLDER_IMG_SRC;
+        return `<img ${before}src="${src}"${after}>`;
+      } catch {
+        return `<img ${before}src="${PLACEHOLDER_IMG_SRC}"${after}>`;
+      }
+    }
+  );
+  // 2) Fallback: replace any remaining ticket-attachments URL (Supabase object URL or sync cid→inline URL)
+  out = out.replace(
+    /https?:\/\/[^"'\s]+\/storage\/v1\/object\/ticket-attachments\/[^"'\s]+/gi,
+    PLACEHOLDER_IMG_SRC
+  );
+  out = out.replace(
+    /https?:\/\/[^"'\s]+\/ticket-attachments\/[^"'\s]+/gi,
+    PLACEHOLDER_IMG_SRC
+  );
+  return out;
 }
 
 export function TicketMessage({
@@ -47,9 +90,11 @@ export function TicketMessage({
   const [failedPaths, setFailedPaths] = useState<Set<string>>(new Set());
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const blobUrlsRef = useRef<string[]>([]);
   const attachments = Array.isArray(message.attachments) ? message.attachments.filter(isMessageAttachment) : [];
   const imageAttachments = attachments.filter(isImageAttachment);
   const nonImageAttachments = attachments.filter((a) => !isImageAttachment(a));
+  const normalizePath = normalizeStoragePath;
 
   const closeLightbox = useCallback(() => setLightboxUrl(null), []);
   useEffect(() => {
@@ -63,28 +108,56 @@ export function TicketMessage({
     };
   }, [lightboxUrl, closeLightbox]);
 
-  const attachmentPaths = attachments.map((a) => a.storage_path);
-  const loadSignedUrls = useCallback(async () => {
+  const attachmentPaths = attachments.map((a) => normalizeStoragePath(a.storage_path));
+  const loadAttachmentUrls = useCallback(async () => {
     if (attachments.length === 0) return;
+    blobUrlsRef.current.forEach((url) => {
+      try { URL.revokeObjectURL(url); } catch { /* noop */ }
+    });
+    blobUrlsRef.current = [];
     const next: Record<string, string> = {};
     const failed = new Set<string>();
     for (const a of attachments) {
-      const path = String(a.storage_path).trim();
+      const path = normalizeStoragePath(a.storage_path);
       if (!path) continue;
-      const { data, error } = await supabase.storage.from('ticket-attachments').createSignedUrl(path, 3600);
-      if (error) {
+      const { data, error } = await supabase.storage.from('ticket-attachments').download(path);
+      if (error || !data) {
         failed.add(path);
         continue;
       }
-      if (data?.signedUrl) next[path] = data.signedUrl;
+      const blob = data as Blob;
+      const objectUrl = URL.createObjectURL(blob);
+      blobUrlsRef.current.push(objectUrl);
+      next[path] = objectUrl;
     }
     setSignedUrls((prev) => ({ ...prev, ...next }));
-    setFailedPaths((prev) => new Set([...prev, ...failed]));
+    setFailedPaths((prev) => {
+      const nextSet = new Set(prev);
+      attachmentPaths.forEach((p) => nextSet.delete(p));
+      failed.forEach((p) => nextSet.add(p));
+      return nextSet;
+    });
   }, [message.id, JSON.stringify(attachmentPaths)]);
 
   useEffect(() => {
-    loadSignedUrls();
-  }, [loadSignedUrls, retryCount]);
+    if (retryCount > 0) {
+      setFailedPaths((prev) => {
+        const next = new Set(prev);
+        attachmentPaths.forEach((p) => next.delete(p));
+        return next;
+      });
+    }
+    loadAttachmentUrls();
+  }, [loadAttachmentUrls, retryCount]);
+
+  useEffect(() => {
+    return () => {
+      blobUrlsRef.current.forEach((url) => {
+        try { URL.revokeObjectURL(url); } catch { /* noop */ }
+      });
+      blobUrlsRef.current = [];
+    };
+  }, [message.id]);
   const isCustomer = message.is_customer;
   const isInternal = message.is_internal_note;
   const showActions = !isInternal && (onReply || onReplyAll || onForward);
@@ -174,7 +247,7 @@ export function TicketMessage({
       {imageAttachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {imageAttachments.map((a) => {
-            const path = String(a.storage_path).trim();
+            const path = normalizePath(a.storage_path);
             const url = path ? signedUrls[path] : null;
             const unavailable = path && failedPaths.has(path);
             if (url) {
@@ -194,17 +267,22 @@ export function TicketMessage({
                 </button>
               );
             }
+            const canRetry = Boolean(path);
             return (
               <button
                 key={path || a.filename}
                 type="button"
-                onClick={() => unavailable && setRetryCount((c) => c + 1)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (canRetry) setRetryCount((c) => c + 1);
+                }}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500 hover:bg-slate-100 hover:border-slate-300 transition-colors text-left"
-                title={unavailable ? 'Bilde ikke tilgjengelig. Klikk for å prøve på nytt.' : 'Laster…'}
+                title={unavailable ? 'Bilde ikke tilgjengelig. Klikk for å prøve på nytt.' : canRetry ? 'Laster… Klikk for å prøve på nytt.' : 'Laster…'}
               >
                 <span className="truncate max-w-[180px]">{a.filename}</span>
                 {a.size != null && <span className="text-xs text-slate-400">({(a.size / 1024).toFixed(1)} KB)</span>}
-                {unavailable && <span className="text-xs">(ikke tilgjengelig – klikk for å prøve på nytt)</span>}
+                {(!url && canRetry) && <span className="text-xs">(ikke tilgjengelig – klikk for å prøve på nytt)</span>}
               </button>
             );
           })}
@@ -214,7 +292,7 @@ export function TicketMessage({
       {nonImageAttachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {nonImageAttachments.map((a) => {
-            const path = String(a.storage_path).trim();
+            const path = normalizePath(a.storage_path);
             const url = path ? signedUrls[path] : null;
             const unavailable = path && failedPaths.has(path);
             if (url) {
@@ -233,28 +311,36 @@ export function TicketMessage({
                 </a>
               );
             }
+            const canRetry = Boolean(path);
             return (
               <button
                 key={path || a.filename}
                 type="button"
-                onClick={() => unavailable && setRetryCount((c) => c + 1)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  if (canRetry) setRetryCount((c) => c + 1);
+                }}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500 hover:bg-slate-100 hover:border-slate-300 transition-colors text-left disabled:opacity-100 disabled:cursor-default"
-                title={unavailable ? 'Vedlegg ikke tilgjengelig. Klikk for å prøve på nytt.' : undefined}
-                disabled={!unavailable}
+                title={unavailable ? 'Vedlegg ikke tilgjengelig. Klikk for å prøve på nytt.' : canRetry ? 'Laster… Klikk for å prøve på nytt.' : undefined}
+                disabled={!canRetry}
               >
                 <Paperclip className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate max-w-[180px]">{a.filename}</span>
                 {a.size != null && <span className="text-xs text-slate-400">({(a.size / 1024).toFixed(1)} KB)</span>}
-                {unavailable && <span className="text-xs">(ikke tilgjengelig – klikk for å prøve på nytt)</span>}
+                {(!url && canRetry) && <span className="text-xs">(ikke tilgjengelig – klikk for å prøve på nytt)</span>}
               </button>
             );
           })}
         </div>
       )}
       <div
-        className="text-slate-700 break-words [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:my-1 [&_li]:my-0.5 [&_a]:text-[var(--hiver-accent)] [&_a]:underline [&_img]:max-w-full [&_img]:h-auto"
+        className="text-slate-700 break-words [&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:my-1 [&_li]:my-0.5 [&_a]:text-[var(--hiver-accent)] [&_a]:underline [&_.message-mention]:text-[var(--hiver-accent)] [&_.message-mention]:font-medium [&_img]:max-w-full [&_img]:h-auto"
         dangerouslySetInnerHTML={{
-          __html: getMessageDisplayHtml(message.html_content, message.content),
+          __html: getMessageDisplayHtml(
+            rewriteMessageHtmlImageUrls(message.html_content ?? '', signedUrls),
+            message.content
+          ),
         }}
       />
       {/* Lightbox for inline image click */}

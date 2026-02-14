@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TenantProvider } from './contexts/TenantContext';
+import { ToastProvider } from './contexts/ToastContext';
 import { TicketProvider } from './contexts/TicketContext';
 import { GmailProvider } from './contexts/GmailContext';
 import { MasterDataProvider } from './contexts/MasterDataContext';
@@ -19,6 +20,7 @@ import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { PlanningPage } from './pages/PlanningPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { NotificationsPage } from './pages/NotificationsPage';
 
 function HomeOrLanding() {
   const { user, loading } = useAuth();
@@ -51,6 +53,7 @@ function AppRoutes() {
         <Route path="customers/:id" element={<CustomerDetailPage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
         <Route path="planning" element={<PlanningPage />} />
+        <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
@@ -63,13 +66,15 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <TenantProvider>
-          <GmailProvider>
-            <MasterDataProvider>
-              <TicketProvider>
-                <AppRoutes />
-              </TicketProvider>
-            </MasterDataProvider>
-          </GmailProvider>
+          <ToastProvider>
+            <GmailProvider>
+              <MasterDataProvider>
+                <TicketProvider>
+                  <AppRoutes />
+                </TicketProvider>
+              </MasterDataProvider>
+            </GmailProvider>
+          </ToastProvider>
         </TenantProvider>
       </AuthProvider>
     </BrowserRouter>

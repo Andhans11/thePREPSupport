@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, Loader2 } from 'lucide-react';
 import { supabase } from '../../services/supabase';
 import { useTenant } from '../../contexts/TenantContext';
+import { useToast } from '../../contexts/ToastContext';
+import { SaveButton } from '../ui/SaveButton';
 
 export interface TeamRow {
   id: string;
@@ -20,6 +22,7 @@ interface TeamMemberOption {
 
 export function TeamsSettings() {
   const { currentTenantId } = useTenant();
+  const toast = useToast();
   const [teams, setTeams] = useState<TeamRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -69,19 +72,24 @@ export function TeamsSettings() {
       setError('Navn er påkrevd.');
       return;
     }
+    if (!currentTenantId) return;
     setError(null);
     setSaving(id);
     const { error: e } = await supabase
       .from('teams')
       .update({ name, description: formDescription.trim() || null, manager_team_member_id: formManagerId || null })
-      .eq('id', id);
-    if (e) setError(e.message);
-    else {
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
+    if (e) {
+      setError(e.message);
+      toast.error(e.message);
+    } else {
       setTeams((prev) => prev.map((t) => (t.id === id ? { ...t, name, description: formDescription.trim() || null, manager_team_member_id: formManagerId } : t)));
       setEditingId(null);
       setFormName('');
       setFormDescription('');
       setFormManagerId(null);
+      toast.success('Team er oppdatert');
     }
     setSaving(null);
   };
@@ -98,6 +106,7 @@ export function TeamsSettings() {
     const { error: e } = await supabase.from('teams').insert({ tenant_id: currentTenantId, name, description: formDescription.trim() || null });
     if (e) {
       setError(e.message);
+      toast.error(e.message);
       setSaving(null);
       return;
     }
@@ -106,17 +115,26 @@ export function TeamsSettings() {
     setAdding(false);
     setSaving(null);
     await fetchTeams();
+    toast.success('Team er opprettet');
   };
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Slette team «${name}»? Saker som er knyttet til teamet vil få fjernet teamtilknytningen.`)) return;
     setError(null);
     setSaving(id);
-    const { error: e } = await supabase.from('teams').delete().eq('id', id);
-    if (e) setError(e.message);
-    else {
+    if (!currentTenantId) return;
+    const { error: e } = await supabase
+      .from('teams')
+      .delete()
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
+    if (e) {
+      setError(e.message);
+      toast.error(e.message);
+    } else {
       setTeams((prev) => prev.filter((t) => t.id !== id));
       if (editingId === id) setEditingId(null);
+      toast.success('Team er slettet');
     }
     setSaving(null);
   };
@@ -190,15 +208,13 @@ export function TeamsSettings() {
             />
           </div>
           <div className="flex gap-2">
-            <button
-              type="button"
+            <SaveButton
               onClick={handleAdd}
-              disabled={saving === 'add'}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50"
+              loading={saving === 'add'}
+              icon={<Plus className="w-4 h-4" />}
             >
-              {saving === 'add' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Lagre
-            </button>
+            </SaveButton>
             <button type="button" onClick={cancelEdit} className="px-3 py-2 rounded-lg border border-[var(--hiver-border)] text-sm font-medium text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
               Avbryt
             </button>
@@ -250,14 +266,13 @@ export function TeamsSettings() {
                       </div>
                     </div>
                     <div className="flex gap-1">
-                      <button
-                        type="button"
+                      <SaveButton
                         onClick={() => handleSaveEdit(t.id)}
-                        disabled={saving === t.id}
-                        className="px-3 py-1.5 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium disabled:opacity-50"
+                        loading={saving === t.id}
+                        className="px-3 py-1.5"
                       >
-                        {saving === t.id ? <Loader2 className="w-4 h-4 animate-spin inline" /> : 'Lagre'}
-                      </button>
+                        Lagre
+                      </SaveButton>
                       <button type="button" onClick={cancelEdit} className="px-3 py-1.5 rounded-lg border border-[var(--hiver-border)] text-sm">
                         Avbryt
                       </button>

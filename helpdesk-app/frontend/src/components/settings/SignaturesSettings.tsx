@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react';
 import { Save, Loader2, FileSignature } from 'lucide-react';
 import { supabase } from '../../services/supabase';
 import { useTenant } from '../../contexts/TenantContext';
+import { useToast } from '../../contexts/ToastContext';
+import { SaveButton } from '../ui/SaveButton';
 
 export function SignaturesSettings() {
   const { currentTenantId } = useTenant();
+  const toast = useToast();
   const [signatureNew, setSignatureNew] = useState('');
   const [signatureFollowUp, setSignatureFollowUp] = useState('');
   const [loading, setLoading] = useState(true);
@@ -39,7 +42,13 @@ export function SignaturesSettings() {
     const { error: e2 } = await supabase
       .from('company_settings')
       .upsert({ tenant_id: currentTenantId, key: 'signature_follow_up', value: signatureFollowUp }, { onConflict: 'tenant_id,key' });
-    if (e1 || e2) setError(e1?.message || e2?.message || 'Kunne ikke lagre');
+    if (e1 || e2) {
+      const msg = e1?.message || e2?.message || 'Kunne ikke lagre';
+      setError(msg);
+      toast.error(msg);
+    } else {
+      toast.success('Signaturer er lagret');
+    }
     setSaving(false);
   };
 
@@ -89,15 +98,13 @@ export function SignaturesSettings() {
             className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
           />
         </div>
-        <button
-          type="button"
+        <SaveButton
           onClick={handleSave}
-          disabled={saving}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50"
+          loading={saving}
+          icon={<Save className="w-4 h-4" />}
         >
-          {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
           Lagre signaturer
-        </button>
+        </SaveButton>
       </div>
     </div>
   );

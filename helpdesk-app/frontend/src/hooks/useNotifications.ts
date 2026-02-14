@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../services/supabase';
 
 export interface NotificationRow {
@@ -11,8 +12,13 @@ export interface NotificationRow {
   created_at: string;
 }
 
-export function useNotifications() {
+const DEFAULT_LIMIT = 20;
+
+export function useNotifications(options: { limit?: number; unreadOnly?: boolean } = {}) {
   const { user } = useAuth();
+  const { currentTenantId } = useTenant();
+  const limit = options.limit ?? DEFAULT_LIMIT;
+  const unreadOnly = options.unreadOnly ?? false;
   const [items, setItems] = useState<NotificationRow[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -24,28 +30,76 @@ export function useNotifications() {
       setLoading(false);
       return;
     }
-    const { data, error } = await supabase
-      .from('notifications')
-      .select('id, title, body, link, read_at, created_at')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(20);
-    if (error) {
-      // Table may not exist yet (404) or RLS; show empty
+    const baseListQuery = () => {
+      let q = supabase
+        .from('notifications')
+        .select('id, title, body, link, read_at, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (currentTenantId) q = q.eq('tenant_id', currentTenantId);
+      if (unreadOnly) q = q.is('read_at', null);
+      return q;
+    };
+    const countQuery = () => {
+      let q = supabase
+        .from('notifications')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+        .is('read_at', null);
+      if (currentTenantId) q = q.eq('tenant_id', currentTenantId);
+      return q;
+    };
+    const [listRes, countRes] = await Promise.all([baseListQuery(), countQuery()]);
+    if (listRes.error) {
       setItems([]);
       setUnreadCount(0);
       setLoading(false);
       return;
     }
-    const list = (data as NotificationRow[]) ?? [];
+    const list = (listRes.data as NotificationRow[]) ?? [];
     setItems(list);
-    setUnreadCount(list.filter((n) => !n.read_at).length);
+    setUnreadCount(countRes.count ?? list.filter((n) => !n.read_at).length);
     setLoading(false);
-  }, [user?.id]);
+  }, [user?.id, currentTenantId, limit, unreadOnly]);
 
   useEffect(() => {
     fetchNotifications();
   }, [fetchNotifications]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    const channel = supabase
+      .channel('notifications')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          fetchNotifications();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'notifications',
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => {
+          fetchNotifications();
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user?.id, fetchNotifications]);
 
   const markAsRead = useCallback(
     async (id: string) => {
@@ -63,14 +117,18 @@ export function useNotifications() {
 
   const markAllAsRead = useCallback(async () => {
     if (!user?.id) return;
-    await supabase
+    let q = supabase
       .from('notifications')
       .update({ read_at: new Date().toISOString() })
       .eq('user_id', user.id)
       .is('read_at', null);
+    if (currentTenantId) {
+      q = q.eq('tenant_id', currentTenantId);
+    }
+    await q;
     setItems((prev) => prev.map((n) => ({ ...n, read_at: n.read_at ?? new Date().toISOString() })));
     setUnreadCount(0);
-  }, [user?.id]);
+  }, [user?.id, currentTenantId]);
 
   return { items, unreadCount, loading, markAsRead, markAllAsRead, refetch: fetchNotifications };
 }

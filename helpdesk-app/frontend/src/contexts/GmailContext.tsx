@@ -3,6 +3,7 @@ import { supabase } from '../services/supabase';
 import { getGmailAuthUrl } from '../services/gmail';
 import { exchangeOAuthCodeForTokens, triggerGmailSync, disconnectGmail } from '../services/api';
 import { useTenant } from './TenantContext';
+import { useToast } from './ToastContext';
 
 interface GmailSyncRow {
   id: string;
@@ -36,6 +37,7 @@ const GmailContext = createContext<GmailContextValue | null>(null);
 
 export function GmailProvider({ children }: { children: React.ReactNode }) {
   const { currentTenantId } = useTenant();
+  const toast = useToast();
   const [gmailSync, setGmailSync] = useState<GmailSyncRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -124,8 +126,10 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
       .eq('tenant_id', currentTenantId);
     if (updateError) {
       setError(updateError.message);
+      toast.error(updateError.message);
     } else {
       setGmailSync((prev) => (prev ? { ...prev, group_email: value } : null));
+      toast.success(value ? 'Gruppe-e-post er lagret' : 'Gruppe-e-post er fjernet');
     }
     setSavingGroupEmail(false);
   };

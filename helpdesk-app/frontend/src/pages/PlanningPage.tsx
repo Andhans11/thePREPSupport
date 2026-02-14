@@ -12,14 +12,47 @@ const SEGMENT_HEIGHT = 32;
 /** Monday .. Sunday keys matching business_hour_templates.schedule */
 const DAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const;
 
+/** Modern, accessible palette: soft but distinct. */
 const USER_COLORS = [
-  '#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0891b2', '#db2777', '#65a30d',
-  '#ea580c', '#4f46e5', '#0d9488', '#ca8a04',
+  '#0ea5e9', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899', '#84cc16',
+  '#f97316', '#6366f1', '#14b8a6', '#eab308',
 ];
-function getUserColor(memberId: string, members: TeamMemberOption[]): { bg: string; border: string; text: string } {
+
+/** Darken hex for readable text on light tinted backgrounds. */
+function darkenHex(hex: string, factor: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.max(0, Math.round(((n >> 16) & 0xff) * (1 - factor)));
+  const g = Math.max(0, Math.round(((n >> 8) & 0xff) * (1 - factor)));
+  const b = Math.max(0, Math.round((n & 0xff) * (1 - factor)));
+  return `#${(r << 16 | g << 8 | b).toString(16).padStart(6, '0')}`;
+}
+
+/** Return white or dark text hex for contrast on the given background hex. */
+function contrastTextOn(hex: string): string {
+  const n = parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 0xff, g = (n >> 8) & 0xff, b = n & 0xff;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.5 ? '#1a1a1a' : '#ffffff';
+}
+
+function getUserColor(memberId: string, members: TeamMemberOption[]): {
+  bg: string;
+  border: string;
+  text: string;
+  textOnLight: string;
+  textOnDark: string;
+  leftBar: string;
+} {
   const i = members.findIndex((m) => m.id === memberId);
   const hex = USER_COLORS[(i >= 0 ? i : 0) % USER_COLORS.length];
-  return { bg: `${hex}22`, border: hex, text: hex };
+  return {
+    bg: `${hex}18`,
+    border: `${hex}40`,
+    text: hex,
+    textOnLight: darkenHex(hex, 0.45),
+    textOnDark: contrastTextOn(hex),
+    leftBar: hex,
+  };
 }
 
 /** Parse "HH:mm" to decimal hour (e.g. "09:30" -> 9.5). */
@@ -113,6 +146,7 @@ interface TeamMemberOption {
   id: string;
   name: string;
   email: string;
+  is_active?: boolean;
 }
 
 export function PlanningPage() {
@@ -145,6 +179,8 @@ export function PlanningPage() {
   const [hoveredSlotId, setHoveredSlotId] = useState<string | null>(null);
   const [editingSlotId, setEditingSlotId] = useState<string | null>(null);
   const [dropPreview, setDropPreview] = useState<{ dayIndex: number; segStart: number; segEnd: number } | null>(null);
+  /** Live segment range during resize drag so the slot visually follows the cursor. */
+  const [resizePreview, setResizePreview] = useState<{ segStart: number; segEnd: number } | null>(null);
   const [slotDragState, setSlotDragState] = useState<{
     type: 'move' | 'resize-top' | 'resize-bottom';
     slot: PlanningSlot;
@@ -155,6 +191,8 @@ export function PlanningPage() {
   const dragRef = useRef<{ dayIndex: number; segIndex: number } | null>(null);
   const calendarGridRef = useRef<HTMLDivElement>(null);
   const slotDragHasMovedRef = useRef(false);
+  /** Set when a slot was just moved/resized so we can run a brief settle animation. */
+  const [recentlyUpdatedSlotId, setRecentlyUpdatedSlotId] = useState<string | null>(null);
 
   const weekDates = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(currentWeekStart);
@@ -194,11 +232,12 @@ export function PlanningPage() {
     if (!currentTenantId) return;
     const { data } = await supabase
       .from('team_members')
-      .select('id, name, email')
+      .select('id, name, email, is_active')
       .eq('tenant_id', currentTenantId)
       .eq('is_active', true)
       .order('name');
-    setMembers((data as TeamMemberOption[]) ?? []);
+    const list = (data as TeamMemberOption[]) ?? [];
+    setMembers(list.filter((m) => m.is_active !== false));
   }, [currentTenantId]);
 
   const fetchBusinessHours = useCallback(async () => {
@@ -285,22 +324,6 @@ export function PlanningPage() {
     const clamped = clampSelectionToOpeningHours(dayIndex, segStart, segEnd);
     if (clamped) setSelection(clamped);
   };
-
-  const handleCellMouseUp = () => {
-    if (dragRef.current !== null) {
-      dragRef.current = null;
-      if (selection) {
-        setShowSelectionPopup(true);
-        setModalEdit({ ...selection });
-      }
-    }
-  };
-
-  useEffect(() => {
-    const up = () => handleCellMouseUp();
-    window.addEventListener('mouseup', up);
-    return () => window.removeEventListener('mouseup', up);
-  }, []);
 
   const getSelectionRange = useCallback(
     (sel: { dayIndex: number; segStart: number; segEnd: number }) => {
@@ -539,14 +562,44 @@ export function PlanningPage() {
     return { dayIndex, segIndex };
   }, [segmentCount]);
 
+  const handleCellMouseUp = useCallback(
+    (e?: { clientX: number; clientY: number }) => {
+      if (dragRef.current === null) return;
+      const start = dragRef.current;
+      let finalSelection = selection;
+      if (e && selection) {
+        const cell = getCellFromEvent(e.clientX, e.clientY);
+        if (cell && cell.dayIndex === start.dayIndex && isSegmentInOpeningHours(cell.dayIndex, cell.segIndex)) {
+          const segStart = Math.min(selection.segStart, selection.segEnd, cell.segIndex);
+          const segEnd = Math.max(selection.segStart, selection.segEnd, cell.segIndex);
+          const clamped = clampSelectionToOpeningHours(start.dayIndex, segStart, segEnd);
+          if (clamped) finalSelection = clamped;
+        }
+      }
+      dragRef.current = null;
+      if (finalSelection) {
+        setSelection(finalSelection);
+        setModalEdit({ ...finalSelection });
+        setShowSelectionPopup(true);
+      }
+    },
+    [selection, getCellFromEvent]
+  );
+
+  useEffect(() => {
+    const up = (e: MouseEvent) => handleCellMouseUp(e);
+    window.addEventListener('mouseup', up);
+    return () => window.removeEventListener('mouseup', up);
+  }, [handleCellMouseUp]);
+
   const updateSlotTimes = useCallback(
     async (slotId: string, startAt: Date, endAt: Date) => {
       if (endAt.getTime() <= startAt.getTime()) return;
-      await supabase
+      const { error } = await supabase
         .from('planning_slots')
         .update({ start_at: startAt.toISOString(), end_at: endAt.toISOString() })
         .eq('id', slotId);
-      fetchSlots();
+      if (error) fetchSlots();
     },
     [fetchSlots]
   );
@@ -571,20 +624,39 @@ export function PlanningPage() {
           const newEnd = new Date(newStart.getTime() + durationMs);
           const maxEndSeg = segmentToDate(currentWeekStart, cell.dayIndex, Math.min(segmentCount, range.end + 1), firstHour);
           if (newEnd.getTime() <= maxEndSeg.getTime()) {
+            setSlots((prev) =>
+              prev.map((s) =>
+                s.id === slot.id ? { ...s, start_at: newStart.toISOString(), end_at: newEnd.toISOString() } : s
+              )
+            );
             updateSlotTimes(slot.id, newStart, newEnd);
+            setRecentlyUpdatedSlotId(slot.id);
+            setTimeout(() => setRecentlyUpdatedSlotId(null), 350);
           }
         }
         slotDragHasMovedRef.current = false;
       } else if (type === 'resize-top' && cell) {
         const clampedStart = Math.max(0, Math.min(cell.segIndex, segEndExclusive - 1));
         const newStart = segmentToDate(currentWeekStart, slotDayIndex, clampedStart, firstHour);
-        if (newStart.getTime() >= origEnd.getTime()) return;
-        updateSlotTimes(slot.id, newStart, origEnd);
+        if (newStart.getTime() < origEnd.getTime()) {
+          setSlots((prev) =>
+            prev.map((s) => (s.id === slot.id ? { ...s, start_at: newStart.toISOString() } : s))
+          );
+          updateSlotTimes(slot.id, newStart, origEnd);
+          setRecentlyUpdatedSlotId(slot.id);
+          setTimeout(() => setRecentlyUpdatedSlotId(null), 350);
+        }
       } else if (type === 'resize-bottom' && cell) {
         const clampedEndSeg = Math.max(segStart + 1, Math.min(cell.segIndex, segmentCount - 1));
         const newEnd = segmentToDate(currentWeekStart, slotDayIndex, clampedEndSeg + 1, firstHour);
-        if (newEnd.getTime() <= origStart.getTime()) return;
-        updateSlotTimes(slot.id, origStart, newEnd);
+        if (newEnd.getTime() > origStart.getTime()) {
+          setSlots((prev) =>
+            prev.map((s) => (s.id === slot.id ? { ...s, end_at: newEnd.toISOString() } : s))
+          );
+          updateSlotTimes(slot.id, origStart, newEnd);
+          setRecentlyUpdatedSlotId(slot.id);
+          setTimeout(() => setRecentlyUpdatedSlotId(null), 350);
+        }
       }
       setSlotDragState(null);
     },
@@ -594,17 +666,33 @@ export function PlanningPage() {
   useEffect(() => {
     if (!slotDragState) return;
     if (slotDragState.type !== 'move') setDropPreview(null);
+    const { originalStartAt, originalEndAt, slotDayIndex } = slotDragState;
+    const dayStartRef = new Date(currentWeekStart);
+    dayStartRef.setDate(dayStartRef.getDate() + slotDayIndex);
+    dayStartRef.setHours(firstHour, 0, 0, 0);
+    const origSegStart = Math.round((new Date(originalStartAt).getTime() - dayStartRef.getTime()) / (30 * 60 * 1000));
+    const origSegEndExcl = Math.round((new Date(originalEndAt).getTime() - dayStartRef.getTime()) / (30 * 60 * 1000));
+    const origSegEnd = origSegEndExcl - 1;
+    if (slotDragState.type === 'resize-top' || slotDragState.type === 'resize-bottom') {
+      const initial = { segStart: origSegStart, segEnd: origSegEnd };
+      setResizePreview(initial);
+      setDropPreview({ dayIndex: slotDayIndex, segStart: initial.segStart, segEnd: initial.segEnd });
+    } else {
+      setResizePreview(null);
+    }
+
     const onUp = (e: MouseEvent) => {
       handleSlotDragEnd(e);
       setDropPreview(null);
+      setResizePreview(null);
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('mousemove', onMove);
     };
     const onMove = (e: MouseEvent) => {
       e.preventDefault();
+      const cell = getCellFromEvent(e.clientX, e.clientY);
       if (slotDragState.type === 'move') {
         slotDragHasMovedRef.current = true;
-        const cell = getCellFromEvent(e.clientX, e.clientY);
         if (cell) {
           const range = daySegRange[cell.dayIndex];
           if (!range || cell.segIndex < range.start || cell.segIndex > range.end) {
@@ -620,6 +708,22 @@ export function PlanningPage() {
         } else {
           setDropPreview(null);
         }
+      } else if (slotDragState.type === 'resize-top' && cell && cell.dayIndex === slotDayIndex) {
+        const range = daySegRange[slotDayIndex];
+        const clamped = range
+          ? Math.max(range.start, Math.min(cell.segIndex, origSegEnd - 1))
+          : Math.max(0, Math.min(cell.segIndex, origSegEnd - 1));
+        const next = { segStart: clamped, segEnd: origSegEnd };
+        setResizePreview(next);
+        setDropPreview({ dayIndex: slotDayIndex, segStart: next.segStart, segEnd: next.segEnd });
+      } else if (slotDragState.type === 'resize-bottom' && cell && cell.dayIndex === slotDayIndex) {
+        const range = daySegRange[slotDayIndex];
+        const clamped = range
+          ? Math.max(origSegStart + 1, Math.min(cell.segIndex, range.end))
+          : Math.max(origSegStart + 1, Math.min(cell.segIndex, segmentCount - 1));
+        const next = { segStart: origSegStart, segEnd: clamped };
+        setResizePreview(next);
+        setDropPreview({ dayIndex: slotDayIndex, segStart: next.segStart, segEnd: next.segEnd });
       }
     };
     window.addEventListener('mouseup', onUp);
@@ -628,7 +732,7 @@ export function PlanningPage() {
       window.removeEventListener('mouseup', onUp);
       window.removeEventListener('mousemove', onMove);
     };
-  }, [slotDragState, handleSlotDragEnd, getCellFromEvent, daySegRange, segmentCount]);
+  }, [slotDragState, handleSlotDragEnd, getCellFromEvent, daySegRange, segmentCount, currentWeekStart, firstHour]);
 
   if (!currentTenantId) {
     return (
@@ -702,11 +806,9 @@ export function PlanningPage() {
               type="button"
               onClick={() => toggleFilterUser(member.id)}
               className={`px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors border ${
-                isSelected
-                  ? 'text-white border-transparent'
-                  : 'opacity-40 border-[var(--hiver-border)] text-[var(--hiver-text-muted)] hover:opacity-60'
+                isSelected ? '' : 'opacity-50 hover:opacity-70 border-[var(--hiver-border)] text-[var(--hiver-text-muted)]'
               }`}
-              style={isSelected ? { backgroundColor: colors.border, borderColor: colors.border } : undefined}
+              style={isSelected ? { backgroundColor: colors.bg, borderColor: colors.leftBar, color: colors.textOnLight } : undefined}
               title={isSelected ? `Klikk for å vise kun ${member.name}` : `Klikk for å vise ${member.name}`}
             >
               {member.name}
@@ -723,20 +825,33 @@ export function PlanningPage() {
             <span className="text-sm font-semibold text-[var(--hiver-text)]">{monthCapitalized}</span>
             <span className="text-xs text-[var(--hiver-text-muted)]">Uke {weekNumber}</span>
           </div>
-          {weekDates.map((d) => (
-            <div
-              key={d.toISOString()}
-              className={`p-2 text-center text-sm font-medium min-w-[80px] ${
-                d.toDateString() === today.toDateString()
-                  ? 'text-[var(--hiver-accent)] bg-[var(--hiver-accent-light)]'
-                  : 'text-[var(--hiver-text)]'
-              }`}
-            >
-              {DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1]}
-              <br />
-              <span className="text-xs">{d.getDate()}</span>
-            </div>
-          ))}
+          {weekDates.map((d, dayIndex) => {
+            const isClosedDay = daySegRange[dayIndex] === null;
+            return (
+              <div
+                key={d.toISOString()}
+                className={`p-2 text-center text-sm font-medium min-w-[80px] border-r border-[var(--hiver-border)] ${
+                  isClosedDay
+                    ? 'bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)]'
+                    : d.toDateString() === today.toDateString()
+                      ? 'text-[var(--hiver-accent)] bg-[var(--hiver-accent-light)]'
+                      : 'text-[var(--hiver-text)]'
+                }`}
+              >
+                {DAYS[d.getDay() === 0 ? 6 : d.getDay() - 1]}
+                <br />
+                <span className="text-xs">{d.getDate()}</span>
+                {isClosedDay && (
+                  <>
+                    <br />
+                    <span className="text-[10px] font-normal text-[var(--hiver-text-muted)] italic mt-0.5 block">
+                      Ikke arbeidsdag
+                    </span>
+                  </>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         <div ref={calendarGridRef} className="relative min-w-[600px]">
@@ -751,10 +866,13 @@ export function PlanningPage() {
               </div>
               {weekDates.map((_, dayIndex) => {
                 const inHours = isSegmentInOpeningHours(dayIndex, segIndex);
+                const isClosedDay = daySegRange[dayIndex] === null;
                 return (
                 <div
                   key={getCellKey(dayIndex, segIndex)}
-                  className={`relative p-0 border-r border-[var(--hiver-border)] last:border-r-0 ${!inHours ? 'bg-[var(--hiver-bg)]/60 pointer-events-none' : ''}`}
+                  className={`relative p-0 border-r border-[var(--hiver-border)] last:border-r-0 ${
+                    isClosedDay ? 'bg-[var(--hiver-bg)] pointer-events-none' : !inHours ? 'bg-[var(--hiver-bg)]/60 pointer-events-none' : ''
+                  }`}
                   style={{ minHeight: SEGMENT_HEIGHT }}
                   onMouseDown={() => handleCellMouseDown(dayIndex, segIndex)}
                   onMouseEnter={() => handleCellMouseEnter(dayIndex, segIndex)}
@@ -765,7 +883,7 @@ export function PlanningPage() {
                     segIndex >= selection.segStart &&
                     segIndex <= selection.segEnd && (
                       <div
-                        className="absolute inset-0 rounded-sm border-2 border-dashed border-[var(--hiver-accent)] bg-[var(--hiver-accent)]/10 pointer-events-none z-[1]"
+                        className="absolute inset-0 rounded-md border-2 border-dashed border-[var(--hiver-accent)] bg-[var(--hiver-accent)]/15 pointer-events-none z-[1]"
                         style={{ left: 0, right: 0, top: 0, bottom: 0 }}
                         aria-hidden
                       />
@@ -776,15 +894,15 @@ export function PlanningPage() {
             </div>
           ))}
 
-          {/* Drop preview: dotted outline when dragging a slot over a valid target */}
+          {/* Drop preview: dotted lines showing where the slot will be put (move and resize) */}
           {dropPreview && (
             <div
-              className="absolute rounded pointer-events-none z-[15] border-2 border-dashed border-[var(--hiver-accent)] bg-[var(--hiver-accent)]/10"
+              className="absolute rounded-xl pointer-events-none z-[14] border-2 border-dashed border-[var(--hiver-accent)] bg-[var(--hiver-accent)]/10"
               style={{
-                left: `calc(12.5% * ${dropPreview.dayIndex + 1} + 1px)`,
-                width: 'calc(12.5% - 2px)',
-                top: dropPreview.segStart * SEGMENT_HEIGHT + 1,
-                height: (dropPreview.segEnd - dropPreview.segStart + 1) * SEGMENT_HEIGHT - 2,
+                left: `calc(12.5% * ${dropPreview.dayIndex + 1} + 3px)`,
+                width: 'calc(12.5% - 6px)',
+                top: dropPreview.segStart * SEGMENT_HEIGHT + 3,
+                height: (dropPreview.segEnd - dropPreview.segStart + 1) * SEGMENT_HEIGHT - 6,
               }}
               aria-hidden
             />
@@ -794,42 +912,78 @@ export function PlanningPage() {
           {weekDates.map((_, dayIndex) => {
             const daySlots = slotSegmentsByDay(dayIndex);
             return daySlots.map((slot) => {
+              const isDraggingThis = slotDragState?.slot.id === slot.id;
+              const slotDayIndex = getSlotDayIndex(slot);
               const name = (slot.team_member as { name?: string })?.name ?? 'Ukjent';
               const start = new Date(slot.start_at);
               const end = new Date(slot.end_at);
-              const timeRange = `${start.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })}–${end.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })}`;
+              let timeRange = `${start.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })}–${end.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })}`;
+              if (isDraggingThis && resizePreview) {
+                const liveStart = segmentToDate(currentWeekStart, slotDayIndex, resizePreview.segStart, firstHour);
+                const liveEnd = segmentToDate(currentWeekStart, slotDayIndex, resizePreview.segEnd + 1, firstHour);
+                timeRange = `${liveStart.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })}–${liveEnd.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })}`;
+              } else if (isDraggingThis && dropPreview) {
+                const liveStart = segmentToDate(currentWeekStart, dropPreview.dayIndex, dropPreview.segStart, firstHour);
+                const liveEnd = segmentToDate(currentWeekStart, dropPreview.dayIndex, dropPreview.segEnd + 1, firstHour);
+                timeRange = `${liveStart.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })}–${liveEnd.toLocaleTimeString('nb-NO', { hour: '2-digit', minute: '2-digit' })}`;
+              }
               const colors = getUserColor(slot.team_member_id, members);
-              const slotDayIndex = getSlotDayIndex(slot);
-              const isDragging = slotDragState?.slot.id === slot.id;
+              const isDragging = isDraggingThis;
               const layout = getSlotColumnLayout(slot, dayIndex, daySlots);
               const isHovered = hoveredSlotId === slot.id;
               const dayWidthPct = 12.5;
               const baseLeft = (dayIndex + 1) * dayWidthPct;
-              const slotWidthPct = isHovered ? dayWidthPct : dayWidthPct / layout.totalCols;
-              const slotLeftPct = isHovered ? baseLeft : baseLeft + layout.col * (dayWidthPct / layout.totalCols);
-              const slotTop = isHovered
+              let slotWidthPct = isHovered ? dayWidthPct : dayWidthPct / layout.totalCols;
+              let slotLeftPct = isHovered ? baseLeft : baseLeft + layout.col * (dayWidthPct / layout.totalCols);
+              let slotTop = isHovered
                 ? layout.blockTop + 1
                 : layout.blockTop + 1 + layout.row * (layout.blockHeight / layout.totalRows);
-              const slotHeight = isHovered
+              let slotHeight = isHovered
                 ? layout.blockHeight - 2
                 : layout.blockHeight / layout.totalRows - 2;
+
+              if (isDraggingThis && slotDragState!.type === 'move' && dropPreview) {
+                slotLeftPct = (dropPreview.dayIndex + 1) * dayWidthPct;
+                slotWidthPct = dayWidthPct;
+                slotTop = dropPreview.segStart * SEGMENT_HEIGHT + 2;
+                slotHeight = (dropPreview.segEnd - dropPreview.segStart + 1) * SEGMENT_HEIGHT - 4;
+              } else if (
+                isDraggingThis &&
+                (slotDragState!.type === 'resize-top' || slotDragState!.type === 'resize-bottom') &&
+                resizePreview
+              ) {
+                slotTop = resizePreview.segStart * SEGMENT_HEIGHT + 2;
+                slotHeight = (resizePreview.segEnd - resizePreview.segStart + 1) * SEGMENT_HEIGHT - 4;
+              }
+              const showDottedOutline = isDraggingThis && (resizePreview != null || dropPreview != null);
+              const justUpdated = recentlyUpdatedSlotId === slot.id;
+
               return (
                 <div
                   key={slot.id}
-                  className="group absolute rounded border text-xs overflow-hidden flex flex-col font-medium cursor-grab active:cursor-grabbing transition-all duration-150"
+                  className="group absolute rounded-xl text-xs overflow-hidden flex flex-col font-medium cursor-grab active:cursor-grabbing shadow-sm hover:shadow-md"
                   style={{
                     left: `${slotLeftPct}%`,
-                    width: `calc(${slotWidthPct}% - 1px)`,
-                    marginLeft: '1px',
+                    width: `calc(${slotWidthPct}% - 2px)`,
+                    marginLeft: '2px',
                     top: slotTop,
                     height: Math.max(20, slotHeight),
                     backgroundColor: colors.bg,
-                    borderColor: colors.border,
-                    borderWidth: '1px',
-                    color: colors.border,
+                    borderLeft: `3px solid ${colors.leftBar}`,
+                    borderTop: `1px solid ${colors.border}`,
+                    borderRight: `1px solid ${colors.border}`,
+                    borderBottom: `1px solid ${colors.border}`,
+                    color: colors.textOnLight,
                     pointerEvents: 'auto',
-                    opacity: isDragging ? 0.8 : 1,
-                    zIndex: isHovered ? 20 : 10,
+                    opacity: isDragging ? 0.95 : 1,
+                    transform: isDragging ? 'scale(1.02)' : undefined,
+                    boxShadow: justUpdated
+                      ? '0 0 0 2px var(--hiver-accent)'
+                      : isDragging
+                        ? '0 8px 24px rgba(0,0,0,0.15)'
+                        : undefined,
+                    zIndex: isDragging ? 30 : isHovered ? 20 : 10,
+                    transition: 'top 0.25s ease-out, height 0.25s ease-out, left 0.25s ease-out, width 0.25s ease-out, box-shadow 0.25s ease-out, opacity 0.2s ease-out, transform 0.2s ease-out',
                   }}
                   onMouseEnter={() => setHoveredSlotId(slot.id)}
                   onMouseLeave={() => setHoveredSlotId(null)}
@@ -847,6 +1001,14 @@ export function PlanningPage() {
                     });
                   }}
                 >
+                  {/* Dotted outline on top of slot during resize/move so it's always visible while dragging */}
+                  {showDottedOutline && (
+                    <div
+                      className="absolute inset-0 rounded-xl border-2 border-dashed border-[var(--hiver-accent)] pointer-events-none z-[5]"
+                      style={{ boxShadow: 'inset 0 0 0 1px var(--hiver-accent)' }}
+                      aria-hidden
+                    />
+                  )}
                   <button
                     type="button"
                     data-edit-slot
@@ -879,7 +1041,7 @@ export function PlanningPage() {
                   </button>
                   <div
                     data-resize-handle="top"
-                    className="absolute left-0 right-0 top-0 h-1.5 cursor-n-resize shrink-0 z-10"
+                    className="absolute left-0 right-0 top-0 h-2 cursor-n-resize shrink-0 z-10 bg-gradient-to-b from-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity rounded-t-xl"
                     onMouseDown={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -899,7 +1061,7 @@ export function PlanningPage() {
                   </div>
                   <div
                     data-resize-handle="bottom"
-                    className="absolute left-0 right-0 bottom-0 h-1.5 cursor-n-resize shrink-0 z-10"
+                    className="absolute left-0 right-0 bottom-0 h-2 cursor-s-resize shrink-0 z-10 bg-gradient-to-t from-black/10 to-transparent opacity-0 group-hover:opacity-100 transition-opacity rounded-b-xl"
                     onMouseDown={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -1118,7 +1280,7 @@ export function PlanningPage() {
                             </span>
                             <span
                               className="text-sm truncate px-2 py-0.5 rounded font-medium"
-                              style={{ color: colors.border, backgroundColor: colors.bg }}
+                              style={{ color: colors.textOnLight, backgroundColor: colors.bg }}
                             >
                               {name}
                             </span>

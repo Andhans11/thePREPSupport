@@ -56,6 +56,26 @@ function getDisplayStatus(m: TeamMemberForList): AvailabilityStatus {
 
 const DAY_LABELS: Record<number, string> = { 0: 'Søn', 1: 'Man', 2: 'Tir', 3: 'Ons', 4: 'Tor', 5: 'Fre', 6: 'Lør' };
 
+/** Schedule from business_hour_templates: day key -> { start, end } or null if closed. */
+type BusinessSchedule = Record<string, { start: string; end: string } | null>;
+const SCHEDULE_DAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
+
+function isWorkingDay(d: Date, schedule: BusinessSchedule | null): boolean {
+  if (!schedule) return d.getDay() >= 1 && d.getDay() <= 5;
+  const key = SCHEDULE_DAY_KEYS[d.getDay()];
+  return !!schedule[key];
+}
+
+/** First calendar day after today that has opening hours. */
+function getNextWorkingDay(fromDate: Date, schedule: BusinessSchedule | null): Date {
+  let d = addDays(startOfDay(fromDate), 1);
+  for (let i = 0; i < 8; i++) {
+    if (isWorkingDay(d, schedule)) return d;
+    d = addDays(d, 1);
+  }
+  return d;
+}
+
 const CHART_PAD = { left: 40, right: 24, top: 16, bottom: 28 };
 const CHART_HEIGHT = 200;
 const CHART_VIEW_WIDTH = 800;
@@ -200,7 +220,8 @@ export function DashboardPage() {
   const [monthTrend, setMonthTrend] = useState<{ date: string; label: string; opened: number; closed: number }[]>([]);
   const [planningSlotsNow, setPlanningSlotsNow] = useState<PlanningSlotOnDashboard[]>([]);
   const [planningSlotsToday, setPlanningSlotsToday] = useState<PlanningSlotOnDashboard[]>([]);
-  const [planningSlotsTomorrow, setPlanningSlotsTomorrow] = useState<PlanningSlotOnDashboard[]>([]);
+  const [planningSlotsNextWorkingDay, setPlanningSlotsNextWorkingDay] = useState<PlanningSlotOnDashboard[]>([]);
+  const [nextWorkingDayLabel, setNextWorkingDayLabel] = useState<string>('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -326,19 +347,45 @@ export function DashboardPage() {
         })
       );
 
-      // Planning: who is on shift now, today's slots, tomorrow's slots (slots overlapping today or tomorrow)
+      // Business hours: determine next working day
+      let businessSchedule: BusinessSchedule | null = null;
+      const { data: defaultScheduleRow } = await supabase
+        .from('business_hour_templates')
+        .select('schedule')
+        .eq('tenant_id', currentTenantId)
+        .eq('is_default', true)
+        .maybeSingle();
+      if (defaultScheduleRow?.schedule && typeof defaultScheduleRow.schedule === 'object' && !Array.isArray(defaultScheduleRow.schedule)) {
+        businessSchedule = defaultScheduleRow.schedule as BusinessSchedule;
+      } else {
+        const { data: firstRow } = await supabase
+          .from('business_hour_templates')
+          .select('schedule')
+          .eq('tenant_id', currentTenantId)
+          .limit(1)
+          .maybeSingle();
+        if (firstRow?.schedule && typeof firstRow.schedule === 'object' && !Array.isArray(firstRow.schedule)) {
+          businessSchedule = firstRow.schedule as BusinessSchedule;
+        }
+      }
       const now = new Date();
       const todayStart = startOfDay(now);
-      const tomorrowStart = addDays(todayStart, 1);
-      const dayAfterTomorrow = addDays(todayStart, 2);
+      const nextWorkingDay = getNextWorkingDay(now, businessSchedule);
+      const nextWorkingDayStart = startOfDay(nextWorkingDay);
+      const nextWorkingDayEnd = addDays(nextWorkingDayStart, 1);
+      setNextWorkingDayLabel(`${DAY_LABELS[nextWorkingDay.getDay()]} ${format(nextWorkingDay, 'd. MMM')}`);
+
+      // Planning: who is on shift now, today's slots, next working day's slots
+      const rangeEnd = addDays(nextWorkingDayStart, 1);
       const { data: planningRows } = await supabase
         .from('planning_slots')
         .select('id, team_member_id, start_at, end_at, team_member:team_members(id, name, email)')
         .eq('tenant_id', currentTenantId)
-        .lt('start_at', dayAfterTomorrow.toISOString())
+        .lt('start_at', rangeEnd.toISOString())
         .gte('end_at', todayStart.toISOString());
       const allSlots = (planningRows ?? []) as unknown as PlanningSlotOnDashboard[];
       const nowTime = now.getTime();
+      const tomorrowStart = addDays(todayStart, 1);
       setPlanningSlotsNow(
         allSlots.filter((s) => {
           const start = new Date(s.start_at).getTime();
@@ -347,7 +394,12 @@ export function DashboardPage() {
         })
       );
       setPlanningSlotsToday(allSlots.filter((s) => isBefore(new Date(s.start_at), tomorrowStart)));
-      setPlanningSlotsTomorrow(allSlots.filter((s) => !isBefore(new Date(s.start_at), tomorrowStart) && isBefore(new Date(s.start_at), dayAfterTomorrow)));
+      setPlanningSlotsNextWorkingDay(
+        allSlots.filter(
+          (s) =>
+            !isBefore(new Date(s.start_at), nextWorkingDayStart) && isBefore(new Date(s.start_at), nextWorkingDayEnd)
+        )
+      );
 
       setLoading(false);
     }
@@ -398,7 +450,7 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Planning overview: on shift now + tomorrow */}
+      {/* Planning overview: on shift now + next working day */}
       <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm mb-6 lg:mb-8">
         <div className="p-5 lg:p-6">
           <div className="flex items-center gap-2 mb-4">
@@ -460,14 +512,21 @@ export function DashboardPage() {
                 </ul>
               )}
             </div>
-            {/* Tomorrow */}
+            {/* Next working day */}
             <div>
-              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider mb-2">I morgen</p>
-              {planningSlotsTomorrow.length === 0 ? (
-                <p className="text-sm text-[var(--hiver-text-muted)]">Ingen planlagte vakter i morgen.</p>
+              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider mb-2">
+                Neste arbeidsdag
+                {nextWorkingDayLabel && (
+                  <span className="font-normal normal-case ml-1.5 text-[var(--hiver-text-muted)]">
+                    ({nextWorkingDayLabel})
+                  </span>
+                )}
+              </p>
+              {planningSlotsNextWorkingDay.length === 0 ? (
+                <p className="text-sm text-[var(--hiver-text-muted)]">Ingen planlagte vakter den dagen.</p>
               ) : (
                 <ul className="space-y-1.5">
-                  {planningSlotsTomorrow
+                  {planningSlotsNextWorkingDay
                     .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime())
                     .map((slot) => {
                       const name = (slot.team_member as { name?: string })?.name ?? 'Ukjent';

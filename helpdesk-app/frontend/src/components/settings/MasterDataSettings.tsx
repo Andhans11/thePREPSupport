@@ -2,7 +2,9 @@ import { useState, useEffect } from 'react';
 import { Plus, Loader2, Pencil, Trash2, Tag, ListOrdered, X } from 'lucide-react';
 import { supabase } from '../../services/supabase';
 import { useTenant } from '../../contexts/TenantContext';
+import { useToast } from '../../contexts/ToastContext';
 import { useMasterData, type TicketStatusRow, type TicketCategoryRow } from '../../contexts/MasterDataContext';
+import { SaveButton } from '../ui/SaveButton';
 
 const DEFAULT_HEX = '#6b7280';
 
@@ -26,6 +28,7 @@ type CategoryModalState = { kind: 'add' } | { kind: 'edit'; row: TicketCategoryR
 
 export function MasterDataSettings() {
   const { currentTenantId } = useTenant();
+  const toast = useToast();
   const { statuses, categories, loading, refetch } = useMasterData();
   const [error, setError] = useState<string | null>(null);
 
@@ -110,22 +113,30 @@ export function MasterDataSettings() {
       color_hex: statusForm.color_hex || null,
     };
     if (statusModal?.kind === 'edit') {
+      if (!currentTenantId) return;
       const { error: e } = await supabase
         .from('ticket_statuses')
         .update(payload)
-        .eq('id', statusModal.row.id);
-      if (e) setError(e.message);
-      else {
+        .eq('id', statusModal.row.id)
+        .eq('tenant_id', currentTenantId);
+      if (e) {
+        setError(e.message);
+        toast.error(e.message);
+      } else {
         await refetch();
         setStatusModal(null);
+        toast.success('Status er oppdatert');
       }
     } else {
       if (!currentTenantId) return;
       const { error: e } = await supabase.from('ticket_statuses').insert({ ...payload, tenant_id: currentTenantId });
-      if (e) setError(e.message);
-      else {
+      if (e) {
+        setError(e.message);
+        toast.error(e.message);
+      } else {
         await refetch();
         setStatusModal(null);
+        toast.success('Status er opprettet');
       }
     }
     setSavingStatus(false);
@@ -133,11 +144,19 @@ export function MasterDataSettings() {
 
   const handleDeleteStatus = async (id: string, code: string) => {
     if (!confirm(`Slette status «${code}»? Saker med denne statusen kan bli påvirket.`)) return;
-    const { error: e } = await supabase.from('ticket_statuses').delete().eq('id', id);
-    if (e) setError(e.message);
-    else {
+    if (!currentTenantId) return;
+    const { error: e } = await supabase
+      .from('ticket_statuses')
+      .delete()
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
+    if (e) {
+      setError(e.message);
+      toast.error(e.message);
+    } else {
       await refetch();
       setStatusModal(null);
+      toast.success('Status er slettet');
     }
   };
 
@@ -155,22 +174,30 @@ export function MasterDataSettings() {
       color_hex: categoryForm.color_hex || null,
     };
     if (categoryModal?.kind === 'edit') {
+      if (!currentTenantId) return;
       const { error: e } = await supabase
         .from('ticket_categories')
         .update(payload)
-        .eq('id', categoryModal.row.id);
-      if (e) setError(e.message);
-      else {
+        .eq('id', categoryModal.row.id)
+        .eq('tenant_id', currentTenantId);
+      if (e) {
+        setError(e.message);
+        toast.error(e.message);
+      } else {
         await refetch();
         setCategoryModal(null);
+        toast.success('Kategori er oppdatert');
       }
     } else {
       if (!currentTenantId) return;
       const { error: e } = await supabase.from('ticket_categories').insert({ ...payload, tenant_id: currentTenantId });
-      if (e) setError(e.message);
-      else {
+      if (e) {
+        setError(e.message);
+        toast.error(e.message);
+      } else {
         await refetch();
         setCategoryModal(null);
+        toast.success('Kategori er opprettet');
       }
     }
     setSavingCategory(false);
@@ -178,11 +205,19 @@ export function MasterDataSettings() {
 
   const handleDeleteCategory = async (id: string, name: string) => {
     if (!confirm(`Slette kategorien «${name}»?`)) return;
-    const { error: e } = await supabase.from('ticket_categories').delete().eq('id', id);
-    if (e) setError(e.message);
-    else {
+    if (!currentTenantId) return;
+    const { error: e } = await supabase
+      .from('ticket_categories')
+      .delete()
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
+    if (e) {
+      setError(e.message);
+      toast.error(e.message);
+    } else {
       await refetch();
       setCategoryModal(null);
+      toast.success('Kategori er slettet');
     }
   };
 
@@ -448,15 +483,12 @@ export function MasterDataSettings() {
                 >
                   Avbryt
                 </button>
-                <button
-                  type="button"
+                <SaveButton
                   onClick={handleSaveStatus}
-                  disabled={savingStatus}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium disabled:opacity-50"
+                  loading={savingStatus}
                 >
-                  {savingStatus ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   {statusModal.kind === 'add' ? 'Legg til' : 'Lagre'}
-                </button>
+                </SaveButton>
               </div>
             </div>
           </div>
@@ -552,15 +584,12 @@ export function MasterDataSettings() {
                 >
                   Avbryt
                 </button>
-                <button
-                  type="button"
+                <SaveButton
                   onClick={handleSaveCategory}
-                  disabled={savingCategory}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium disabled:opacity-50"
+                  loading={savingCategory}
                 >
-                  {savingCategory ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
                   {categoryModal.kind === 'add' ? 'Legg til' : 'Lagre'}
-                </button>
+                </SaveButton>
               </div>
             </div>
           </div>

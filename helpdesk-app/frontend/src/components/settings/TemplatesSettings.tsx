@@ -3,7 +3,9 @@ import { Plus, Pencil, Trash2, Loader2, FileText, MailCheck } from 'lucide-react
 import { supabase } from '../../services/supabase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
+import { useToast } from '../../contexts/ToastContext';
 import { compileTemplate, TEMPLATE_VARIABLES_PREVIEW } from '../../utils/templateHandlebars';
+import { SaveButton } from '../ui/SaveButton';
 
 interface TemplateRow {
   id: string;
@@ -17,6 +19,7 @@ interface TemplateRow {
 export function TemplatesSettings() {
   const { user } = useAuth();
   const { currentTenantId } = useTenant();
+  const toast = useToast();
   const [templates, setTemplates] = useState<TemplateRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -107,11 +110,19 @@ export function TemplatesSettings() {
       updated_at: new Date().toISOString(),
     };
     if (editingId) {
-      const { error: e } = await supabase.from('templates').update(payload).eq('id', editingId);
-      if (e) setError(e.message);
-      else {
+      if (!currentTenantId) return;
+      const { error: e } = await supabase
+        .from('templates')
+        .update(payload)
+        .eq('id', editingId)
+        .eq('tenant_id', currentTenantId);
+      if (e) {
+        setError(e.message);
+        toast.error(e.message);
+      } else {
         setTemplates((prev) => prev.map((t) => (t.id === editingId ? { ...t, ...payload } : t)));
         resetForm();
+        toast.success('Mal er oppdatert');
       }
     } else {
       if (!currentTenantId) return;
@@ -120,9 +131,14 @@ export function TemplatesSettings() {
         tenant_id: currentTenantId,
         created_by: user?.id ?? null,
       });
-      if (e) setError(e.message);
-      else await fetchTemplates();
-      resetForm();
+      if (e) {
+        setError(e.message);
+        toast.error(e.message);
+      } else {
+        await fetchTemplates();
+        resetForm();
+        toast.success('Mal er opprettet');
+      }
     }
     setSaving(false);
   };
@@ -130,7 +146,12 @@ export function TemplatesSettings() {
   const handleDelete = async (id: string) => {
     if (!confirm('Slette denne malen?')) return;
     setError(null);
-    const { error: e } = await supabase.from('templates').delete().eq('id', id);
+    if (!currentTenantId) return;
+    const { error: e } = await supabase
+      .from('templates')
+      .delete()
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
     if (e) setError(e.message);
     else setTemplates((prev) => prev.filter((t) => t.id !== id));
   };
@@ -151,7 +172,13 @@ export function TemplatesSettings() {
         { tenant_id: currentTenantId, key: 'ticket_received_content', value: ticketReceivedContent },
         { onConflict: 'tenant_id,key' }
       );
-    if (e1 || e2) setError(e1?.message || e2?.message || 'Kunne ikke lagre');
+    if (e1 || e2) {
+      const msg = e1?.message || e2?.message || 'Kunne ikke lagre';
+      setError(msg);
+      toast.error(msg);
+    } else {
+      toast.success('Mottaksbekreftelse er lagret');
+    }
     setTicketReceivedSaving(false);
   };
 
@@ -212,15 +239,12 @@ export function TemplatesSettings() {
             <div className="text-sm text-[var(--hiver-text)] whitespace-pre-wrap">{ticketReceivedPreview}</div>
           </div>
         )}
-        <button
-          type="button"
+        <SaveButton
           onClick={handleSaveTicketReceived}
-          disabled={ticketReceivedSaving}
-          className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50"
+          loading={ticketReceivedSaving}
         >
-          {ticketReceivedSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
           Lagre mottaksbekreftelse
-        </button>
+        </SaveButton>
       </div>
 
       <div className="flex items-center justify-between">
@@ -302,15 +326,9 @@ export function TemplatesSettings() {
             </div>
           )}
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+            <SaveButton onClick={handleSave} loading={saving}>
               {editingId ? 'Lagre endringer' : 'Opprett mal'}
-            </button>
+            </SaveButton>
             <button
               type="button"
               onClick={resetForm}

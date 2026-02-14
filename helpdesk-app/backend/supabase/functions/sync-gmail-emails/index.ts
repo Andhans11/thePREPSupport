@@ -56,6 +56,28 @@ function getPartFilename(part: { filename?: string; headers?: { name: string; va
   return null;
 }
 
+/** Content-ID from part (e.g. "<image001>") normalized to "image001" for cid: matching. */
+function getPartContentId(part: { headers?: { name: string; value: string }[] }): string | null {
+  const raw = part.headers?.find((h) => h.name.toLowerCase() === 'content-id')?.value?.trim();
+  if (!raw) return null;
+  const id = raw.replace(/^<|>$/g, '').trim();
+  return id || null;
+}
+
+/**
+ * Replace cid: references in HTML with ticket-attachments URLs so the frontend can resolve to blob.
+ * cidToPath: map from normalized Content-ID (no angle brackets) to storage_path.
+ */
+function replaceCidWithStorageUrls(html: string, cidToPath: Record<string, string>): string {
+  if (!html || Object.keys(cidToPath).length === 0) return html;
+  return html.replace(/cid:<?([^">\s]+)>?/gi, (_, cid) => {
+    const normalized = cid.replace(/^<|>$/g, '').trim();
+    const path = cidToPath[normalized] ?? cidToPath[cid];
+    if (!path) return `cid:${cid}`;
+    return `https://inline/ticket-attachments/${path}`;
+  });
+}
+
 /** Flatten MIME part tree so inline images inside multipart/related (or nested) are included. */
 function flattenParts(
   payload: { parts?: unknown[]; body?: { data?: string; attachmentId?: string } } | null,
@@ -74,7 +96,9 @@ function flattenParts(
   return acc;
 }
 
-type AttachmentPart = { filename: string; mimeType: string; attachmentId?: string; inlineData?: string };
+type AttachmentPart = { filename: string; mimeType: string; attachmentId?: string; inlineData?: string; contentId?: string | null };
+
+type UploadedAttachment = { storage_path: string; filename: string; mime_type: string; size: number };
 
 async function fetchAndUploadAttachments(
   accessToken: string,
@@ -84,9 +108,10 @@ async function fetchAndUploadAttachments(
   ticketId: string,
   messageId: string,
   supabase: ReturnType<typeof createClient>
-): Promise<{ storage_path: string; filename: string; mime_type: string; size: number }[]> {
+): Promise<{ uploaded: UploadedAttachment[]; cidToPath: Record<string, string> }> {
   const bucket = 'ticket-attachments';
-  const results: { storage_path: string; filename: string; mime_type: string; size: number }[] = [];
+  const uploaded: UploadedAttachment[] = [];
+  const cidToPath: Record<string, string> = {};
   const sanitize = (s: string) => s.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 200) || 'attachment';
   for (let i = 0; i < parts.length; i++) {
     const part = parts[i];
@@ -112,9 +137,15 @@ async function fetchAndUploadAttachments(
       contentType: part.mimeType || 'application/octet-stream',
       upsert: true,
     });
-    if (!error) results.push({ storage_path: storagePath, filename: part.filename, mime_type: part.mimeType || 'application/octet-stream', size: bytes.length });
+    if (!error) {
+      uploaded.push({ storage_path: storagePath, filename: part.filename, mime_type: part.mimeType || 'application/octet-stream', size: bytes.length });
+      if (part.contentId) {
+        const normalized = part.contentId.replace(/^<|>$/g, '').trim();
+        if (normalized) cidToPath[normalized] = storagePath;
+      }
+    }
   }
-  return results;
+  return { uploaded, cidToPath };
 }
 
 type GmailSyncRow = {
@@ -233,12 +264,16 @@ async function runSyncForGmailRow(
     const fromName = from.replace(/<[^>]+>/, '').trim() || null;
 
     let body = '';
+    let htmlBody = '';
     const flatParts = flattenParts(full.payload);
     const attachmentParts: AttachmentPart[] = [];
     for (const part of flatParts) {
       const p = part as { mimeType?: string; body?: { data?: string; attachmentId?: string }; filename?: string; headers?: { name: string; value: string }[] };
       if (p.mimeType === 'text/plain' && p.body?.data) {
         body = decodeBase64Url(p.body.data);
+      }
+      if (p.mimeType === 'text/html' && p.body?.data) {
+        htmlBody = decodeBase64Url(p.body.data);
       }
       const filename = getPartFilename(p) || `attachment_${attachmentParts.length + 1}`;
       const hasData = p.body?.attachmentId || p.body?.data;
@@ -249,6 +284,7 @@ async function runSyncForGmailRow(
           mimeType: p.mimeType || 'application/octet-stream',
           attachmentId: p.body?.attachmentId,
           inlineData: p.body?.data ? (p.body.data as string) : undefined,
+          contentId: getPartContentId(p) ?? undefined,
         });
       }
     }
@@ -282,12 +318,18 @@ async function runSyncForGmailRow(
           gmail_message_id: msg.id,
         }).select('id').single();
         if (inserted?.id && attachmentParts.length > 0) {
-          const uploaded = await fetchAndUploadAttachments(
+          const { uploaded, cidToPath } = await fetchAndUploadAttachments(
             accessToken, msg.id, attachmentParts, tenantIdForData, existingTicket.id, inserted.id, serviceSupabase
           );
-          if (uploaded.length > 0) {
-            await serviceSupabase.from('messages').update({ attachments: uploaded }).eq('id', inserted.id);
-          }
+          const htmlContentToStore = htmlBody ? replaceCidWithStorageUrls(htmlBody, cidToPath) : null;
+          await serviceSupabase.from('messages').update({
+            attachments: uploaded.length > 0 ? uploaded : undefined,
+            html_content: htmlContentToStore,
+          }).eq('id', inserted.id);
+        } else if (inserted?.id && htmlBody) {
+          await serviceSupabase.from('messages').update({
+            html_content: replaceCidWithStorageUrls(htmlBody, {}),
+          }).eq('id', inserted.id);
         }
         created++;
       }
@@ -332,12 +374,18 @@ async function runSyncForGmailRow(
             gmail_message_id: msg.id,
           }).select('id').single();
           if (inserted?.id && attachmentParts.length > 0) {
-            const uploaded = await fetchAndUploadAttachments(
+            const { uploaded, cidToPath } = await fetchAndUploadAttachments(
               accessToken, msg.id, attachmentParts, tenantIdForData, ticketByNumber.id, inserted.id, serviceSupabase
             );
-            if (uploaded.length > 0) {
-              await serviceSupabase.from('messages').update({ attachments: uploaded }).eq('id', inserted.id);
-            }
+            const htmlContentToStore = htmlBody ? replaceCidWithStorageUrls(htmlBody, cidToPath) : null;
+            await serviceSupabase.from('messages').update({
+              attachments: uploaded.length > 0 ? uploaded : undefined,
+              html_content: htmlContentToStore,
+            }).eq('id', inserted.id);
+          } else if (inserted?.id && htmlBody) {
+            await serviceSupabase.from('messages').update({
+              html_content: replaceCidWithStorageUrls(htmlBody, {}),
+            }).eq('id', inserted.id);
           }
           created++;
         }
@@ -396,12 +444,25 @@ async function runSyncForGmailRow(
       is_customer: true,
       gmail_message_id: msg.id,
     }).select('id').single();
-    if (inserted?.id && attachmentParts.length > 0) {
-      const uploaded = await fetchAndUploadAttachments(
-        accessToken, msg.id, attachmentParts, tenantIdForData, newTicket.id, inserted.id, serviceSupabase
-      );
-      if (uploaded.length > 0) {
-        await serviceSupabase.from('messages').update({ attachments: uploaded }).eq('id', inserted.id);
+    if (inserted?.id && (attachmentParts.length > 0 || htmlBody)) {
+      let htmlContentToStore: string | null = null;
+      if (attachmentParts.length > 0) {
+        const { uploaded, cidToPath } = await fetchAndUploadAttachments(
+          accessToken, msg.id, attachmentParts, tenantIdForData, newTicket.id, inserted.id, serviceSupabase
+        );
+        htmlContentToStore = htmlBody ? replaceCidWithStorageUrls(htmlBody, cidToPath) : null;
+        if (uploaded.length > 0) {
+          await serviceSupabase.from('messages').update({
+            attachments: uploaded,
+            html_content: htmlContentToStore,
+          }).eq('id', inserted.id);
+        } else if (htmlContentToStore) {
+          await serviceSupabase.from('messages').update({ html_content: htmlContentToStore }).eq('id', inserted.id);
+        }
+      } else if (htmlBody) {
+        await serviceSupabase.from('messages').update({
+          html_content: replaceCidWithStorageUrls(htmlBody, {}),
+        }).eq('id', inserted.id);
       }
     }
 

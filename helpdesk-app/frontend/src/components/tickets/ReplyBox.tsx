@@ -7,6 +7,141 @@ import { useTickets } from '../../contexts/TicketContext';
 import { sendGmailReply, type EmailAttachment } from '../../services/api';
 import { supabase } from '../../services/supabase';
 import { compileTemplate } from '../../utils/templateHandlebars';
+import { extractMentionedUserIds, mentionsToPlainNames } from '../../utils/sanitizeHtml';
+import type { Message } from '../../types/message';
+
+interface MentionMember {
+  user_id: string;
+  name: string;
+}
+
+/** Get character offset of caret from start of element (text content). */
+function getCaretCharacterOffsetWithin(element: HTMLElement): number {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return 0;
+  const range = sel.getRangeAt(0);
+  const preCaretRange = range.cloneRange();
+  preCaretRange.selectNodeContents(element);
+  preCaretRange.setEnd(range.startContainer, range.startOffset);
+  return preCaretRange.toString().length;
+}
+
+/** Get (node, offset) for a given character offset inside element. */
+function getNodeAndOffsetAtCharacterOffset(element: HTMLElement, charOffset: number): { node: Node; offset: number } {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null);
+  let current = 0;
+  let node: Node | null = walker.nextNode();
+  while (node) {
+    const len = (node.textContent || '').length;
+    if (current + len >= charOffset) return { node, offset: charOffset - current };
+    current += len;
+    node = walker.nextNode();
+  }
+  return { node: element, offset: element.childNodes.length };
+}
+
+const DATA_URL_IMG_REGEX = /<img([^>]*?)src\s*=\s*["'](data:image\/[^"']+)["']([^>]*)>/gi;
+
+/** Upload inline data URL images to storage and return HTML with img src replaced by ticket-attachments URLs plus attachments list. */
+async function processInlineImagesInHtml(
+  html: string | null,
+  tenantId: string,
+  ticketId: string,
+  messageId: string
+): Promise<{ html: string | null; inlineAttachments: { storage_path: string; filename: string; mime_type: string; size: number }[] }> {
+  if (!html || !html.includes('data:image/')) return { html, inlineAttachments: [] };
+  const matches = [...html.matchAll(DATA_URL_IMG_REGEX)];
+  if (matches.length === 0) return { html, inlineAttachments: [] };
+  const inlineAttachments: { storage_path: string; filename: string; mime_type: string; size: number }[] = [];
+  const replacementTags: string[] = [];
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    const dataUrl = m[2];
+    const comma = dataUrl.indexOf(',');
+    if (comma === -1) {
+      replacementTags.push(m[0]);
+      continue;
+    }
+    const header = dataUrl.slice(0, comma);
+    const mimeMatch = header.match(/data:image\/(\w+)/i);
+    const ext = mimeMatch ? (mimeMatch[1] === 'jpeg' ? 'jpg' : mimeMatch[1]) : 'png';
+    const base64 = dataUrl.slice(comma + 1);
+    try {
+      const bin = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const filename = `pasted_${i}.${ext}`;
+      const path = `${tenantId}/${ticketId}/${messageId}/${filename}`;
+      const { error } = await supabase.storage.from('ticket-attachments').upload(path, bin, {
+        contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+        upsert: true,
+      });
+      if (error) {
+        replacementTags.push(m[0]);
+        continue;
+      }
+      inlineAttachments.push({
+        storage_path: path,
+        filename,
+        mime_type: `image/${ext === 'jpg' ? 'jpeg' : ext}`,
+        size: bin.length,
+      });
+      replacementTags.push(`<img${m[1]}src="https://inline/ticket-attachments/${path}"${m[3]}>`);
+    } catch {
+      replacementTags.push(m[0]);
+    }
+  }
+  let out = html;
+  for (let i = 0; i < matches.length; i++) {
+    out = out.replace(matches[i][0], replacementTags[i]);
+  }
+  return { html: out, inlineAttachments };
+}
+
+/** Build plain-text and HTML conversation history (excluding internal notes) for including in email reply. */
+function buildConversationHistory(messages: Message[]): { plain: string; html: string } {
+  const publicMessages = messages
+    .filter((m) => !m.is_internal_note)
+    .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  if (publicMessages.length === 0) return { plain: '', html: '' };
+
+  const dateFmt = (iso: string) =>
+    new Date(iso).toLocaleDateString('nb-NO', {
+      day: 'numeric',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  const plainParts: string[] = [];
+  const htmlParts: string[] = [];
+
+  for (const m of publicMessages) {
+    const from = m.from_name?.trim() || m.from_email || '—';
+    const header = `Den ${dateFmt(m.created_at)} skrev ${from} (${m.from_email}):`;
+    const bodyPlain = (m.html_content || m.content || '')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .trim();
+    const bodyText = bodyPlain || '(ingen tekst)';
+    plainParts.push(header + '\n\n' + bodyText);
+
+    const bodyHtmlEscaped = bodyText
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/\n/g, '<br>');
+    const headerEscaped = header.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    htmlParts.push(
+      `<div style="margin:0.75em 0;padding-left:1em;border-left:3px solid #ccc;color:#555;">` +
+        `<div style="font-size:0.85em;margin-bottom:0.25em;">${headerEscaped}</div>` +
+        `<div>${bodyHtmlEscaped}</div></div>`
+    );
+  }
+
+  return {
+    plain: '\n\n---\n\n' + plainParts.join('\n\n---\n\n'),
+    html: '<br><br><div style="border-top:1px solid #ccc;margin-top:1em;padding-top:1em;color:#666;">' + htmlParts.join('') + '</div>',
+  };
+}
 
 interface ReplyBoxProps {
   ticketId: string;
@@ -56,6 +191,9 @@ export function ReplyBox({
   const attachmentInputRef = useRef<HTMLInputElement>(null);
   const savedSelectionRef = useRef<Range | null>(null);
   const [attachment, setAttachment] = useState<EmailAttachment | null>(null);
+  const [mentionMembers, setMentionMembers] = useState<MentionMember[]>([]);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [mentionReplaceLength, setMentionReplaceLength] = useState(0);
 
   const saveSelection = () => {
     const sel = document.getSelection();
@@ -102,6 +240,18 @@ export function ReplyBox({
           if (r.key === 'signature_follow_up') setSignatureFollowUp(v);
         });
       });
+  }, [currentTenantId]);
+
+  useEffect(() => {
+    if (!currentTenantId) return;
+    supabase
+      .from('team_members')
+      .select('user_id, name')
+      .eq('tenant_id', currentTenantId)
+      .not('user_id', 'is', null)
+      .eq('is_active', true)
+      .order('name')
+      .then(({ data }) => setMentionMembers((data as MentionMember[]) ?? []));
   }, [currentTenantId]);
 
   const templateContext = {
@@ -190,8 +340,57 @@ export function ReplyBox({
     e.target.value = '';
   };
 
+  const getTextBeforeCaret = (): string => {
+    if (!editorRef.current) return '';
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return '';
+    const range = sel.getRangeAt(0).cloneRange();
+    range.selectNodeContents(editorRef.current);
+    range.setEnd(sel.anchorNode!, sel.anchorOffset);
+    return range.toString();
+  };
+
   const handleInput = () => {
     if (editorRef.current) setContent(editorRef.current.innerHTML);
+    const textBefore = getTextBeforeCaret();
+    const lastAt = textBefore.lastIndexOf('@');
+    if (lastAt === -1) {
+      setMentionQuery(null);
+      return;
+    }
+    const afterAt = textBefore.slice(lastAt + 1);
+    if (/[\s\n\[\]()]/.test(afterAt)) {
+      setMentionQuery(null);
+      return;
+    }
+    setMentionQuery(afterAt);
+    setMentionReplaceLength(textBefore.length - lastAt);
+  };
+
+  const filteredMentionMembers = mentionQuery == null
+    ? []
+    : mentionMembers.filter((m) => m.name.toLowerCase().includes(mentionQuery.toLowerCase())).slice(0, 8);
+  const showMentionDropdown = mentionQuery !== null && filteredMentionMembers.length > 0;
+
+  const insertMention = (member: MentionMember) => {
+    const editor = editorRef.current;
+    const sel = window.getSelection();
+    if (!editor || !sel || sel.rangeCount === 0) return;
+    const replaceLen = mentionReplaceLength;
+    const caretOffset = getCaretCharacterOffsetWithin(editor);
+    const startOffset = caretOffset - replaceLen;
+    if (startOffset < 0) return;
+    const start = getNodeAndOffsetAtCharacterOffset(editor, startOffset);
+    const end = getNodeAndOffsetAtCharacterOffset(editor, caretOffset);
+    const range = document.createRange();
+    range.setStart(start.node, start.offset);
+    range.setEnd(end.node, end.offset);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const mentionText = `@[${member.name}](${member.user_id})`;
+    document.execCommand('insertText', false, mentionText);
+    setMentionQuery(null);
+    setContent(editor.innerHTML);
   };
 
   const handleSend = async () => {
@@ -202,14 +401,25 @@ export function ReplyBox({
     setSending(true);
 
     const signature = isInternalNote ? '' : (hasExistingReplies ? signatureFollowUp : signatureNew);
-    const contentToSend = signature ? `${trimmed}\n\n${signature}` : trimmed;
+    const replyOnlyPlain = signature ? `${trimmed}\n\n${signature}` : trimmed;
     const editorHtml = editorRef.current?.innerHTML ?? null;
     const signatureHtml = signature ? `<div style="margin-top:1em">${signature.replace(/\n/g, '<br>')}</div>` : '';
-    const htmlToSend = isInternalNote ? null : (editorHtml ? editorHtml + signatureHtml : null);
+    const replyOnlyHtml = isInternalNote ? null : (editorHtml ? editorHtml + signatureHtml : null);
+
+    const mentioned_user_ids = extractMentionedUserIds(trimmed);
+
+    // For email to customer: show @Name only (not the UUID)
+    const conversation = canSendViaGmail ? buildConversationHistory(messages) : { plain: '', html: '' };
+    const plainForEmail = mentionsToPlainNames(replyOnlyPlain);
+    const contentToSend = plainForEmail + conversation.plain;
+    const replyHtmlForEmail = replyOnlyHtml
+      ? replyOnlyHtml.replace(/@\[([^\]]*)\]\([a-f0-9-]{36}\)/gi, '@$1')
+      : null;
+    const htmlToSendFinal = replyHtmlForEmail ? replyHtmlForEmail + (canSendViaGmail ? conversation.html : '') : null;
 
     try {
       if (canSendViaGmail) {
-        const result = await sendGmailReply(ticketId, contentToSend, customerEmail, false, htmlToSend ?? undefined, attachment ?? undefined, replyAll);
+        const result = await sendGmailReply(ticketId, contentToSend, customerEmail, false, htmlToSendFinal ?? undefined, attachment ?? undefined, replyAll);
         if (!result.success) {
           setError(result.error || 'Kunne ikke sende');
           setSending(false);
@@ -220,11 +430,15 @@ export function ReplyBox({
         ticket_id: ticketId,
         from_email: (groupEmail?.trim() || gmailEmail?.trim() || user?.email || '').trim() || user?.email || '',
         from_name: user?.user_metadata?.full_name ?? null,
-        content: contentToSend,
-        html_content: htmlToSend,
+        content: replyOnlyPlain,
+        html_content: replyOnlyHtml,
         is_customer: false,
         is_internal_note: isInternalNote,
+        mentioned_user_ids: mentioned_user_ids.length ? mentioned_user_ids : undefined,
+        created_by: user?.id,
       });
+      type AttRow = { storage_path: string; filename: string; mime_type: string; size: number };
+      let paperclipAtt: AttRow[] = [];
       if (attachment && messageId && currentTenantId) {
         const bin = Uint8Array.from(atob(attachment.contentBase64), (c) => c.charCodeAt(0));
         const path = `${currentTenantId}/${ticketId}/${messageId}/${attachment.filename.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
@@ -233,8 +447,20 @@ export function ReplyBox({
           upsert: true,
         });
         if (!upErr) {
-          const att = [{ storage_path: path, filename: attachment.filename, mime_type: attachment.mimeType || 'application/octet-stream', size: bin.length }];
-          await supabase.from('messages').update({ attachments: att }).eq('id', messageId);
+          paperclipAtt = [{ storage_path: path, filename: attachment.filename, mime_type: attachment.mimeType || 'application/octet-stream', size: bin.length }];
+          await supabase.from('messages').update({ attachments: paperclipAtt }).eq('id', messageId);
+        }
+      }
+      if (replyOnlyHtml?.includes('data:image/') && messageId && currentTenantId) {
+        const { html: newHtml, inlineAttachments } = await processInlineImagesInHtml(replyOnlyHtml, currentTenantId, ticketId, messageId);
+        if (newHtml != null || inlineAttachments.length > 0) {
+          await supabase
+            .from('messages')
+            .update({
+              ...(newHtml != null && { html_content: newHtml }),
+              attachments: [...paperclipAtt, ...inlineAttachments],
+            })
+            .eq('id', messageId);
         }
       }
       if (editorRef.current) editorRef.current.innerHTML = '';
@@ -397,15 +623,39 @@ export function ReplyBox({
             )}
           </div>
         )}
-        <div
-          ref={editorRef}
-          contentEditable
-          onInput={handleInput}
-          onPaste={handlePaste}
-          className="min-h-[120px] max-h-[280px] overflow-y-auto px-3 py-2 text-sm text-[var(--hiver-text)] focus:outline-none empty:before:content-[attr(data-placeholder)] empty:before:text-[var(--hiver-text-muted)] [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:my-1 [&_li]:my-0.5 [&_li]:pl-0.5 [&_img]:max-w-full [&_img]:h-auto"
-          data-placeholder={isInternalNote ? 'Skriv en intern notat…' : 'Skriv svaret ditt…'}
-          suppressContentEditableWarning
-        />
+        <div className="relative">
+          <div
+            ref={editorRef}
+            contentEditable
+            onInput={handleInput}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setMentionQuery(null);
+            }}
+            onPaste={handlePaste}
+            className="min-h-[120px] max-h-[280px] overflow-y-auto px-3 py-2 text-sm text-[var(--hiver-text)] focus:outline-none empty:before:content-[attr(data-placeholder)] empty:before:text-[var(--hiver-text-muted)] [&_ul]:list-disc [&_ul]:pl-6 [&_ul]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ol]:my-1 [&_li]:my-0.5 [&_li]:pl-0.5 [&_img]:max-w-full [&_img]:h-auto"
+            data-placeholder={isInternalNote ? 'Skriv en intern notat… Skriv @ for å nevne en kollega.' : 'Skriv svaret ditt… Skriv @ for å nevne en kollega.'}
+            suppressContentEditableWarning
+          />
+          {showMentionDropdown && (
+            <ul
+              className="absolute left-0 right-0 top-full z-20 mt-1 max-h-48 overflow-auto rounded-lg border border-[var(--hiver-border)] bg-white py-1 shadow-lg"
+              role="listbox"
+            >
+              {filteredMentionMembers.map((m) => (
+                <li key={m.user_id}>
+                  <button
+                    type="button"
+                    role="option"
+                    className="w-full px-3 py-2 text-left text-sm hover:bg-[var(--hiver-bg)]"
+                    onClick={() => insertMention(m)}
+                  >
+                    @{m.name}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
       {attachment && (
         <div className="flex items-center gap-2 mt-2 text-sm text-[var(--hiver-text-muted)]">

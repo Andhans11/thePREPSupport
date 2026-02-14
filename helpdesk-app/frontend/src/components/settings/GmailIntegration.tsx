@@ -5,6 +5,7 @@ import { useTickets } from '../../contexts/TicketContext';
 import { formatRelative, formatDateTime } from '../../utils/formatters';
 import { supabase } from '../../services/supabase';
 import { Mail, RefreshCw, Unplug, Building2 } from 'lucide-react';
+import { SaveButton } from '../ui/SaveButton';
 
 export function GmailIntegration() {
   const {
@@ -101,14 +102,13 @@ export function GmailIntegration() {
                 placeholder="f.eks. support@theprep.ai"
                 className="flex-1 min-w-[200px] rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 focus:border-[var(--hiver-accent)]"
               />
-              <button
-                type="button"
+              <SaveButton
                 onClick={handleSaveGroupEmail}
-                disabled={savingGroupEmail || groupEmailInput.trim() === (groupEmail ?? '')}
-                className="px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50 disabled:pointer-events-none"
+                loading={savingGroupEmail}
+                disabled={groupEmailInput.trim() === (groupEmail ?? '')}
               >
-                {savingGroupEmail ? 'Lagrer…' : 'Lagre'}
-              </button>
+                Lagre
+              </SaveButton>
             </div>
             {groupEmailTouched && groupEmailInput.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(groupEmailInput.trim()) && (
               <p className="text-xs text-red-600 mt-1">Skriv inn en gyldig e-postadresse.</p>

@@ -1,7 +1,9 @@
 import { useEffect, useState, useRef } from 'react';
-import { Building2, Save, Loader2, Upload, X } from 'lucide-react';
+import { Building2, Save, Loader2, Upload, X, Ticket } from 'lucide-react';
 import { supabase } from '../../services/supabase';
 import { useTenant } from '../../contexts/TenantContext';
+import { useToast } from '../../contexts/ToastContext';
+import { SaveButton } from '../ui/SaveButton';
 import { GmailIntegration } from './GmailIntegration';
 
 const LOGO_ACCEPT = 'image/png,image/jpeg,image/jpg,image/svg+xml';
@@ -43,8 +45,10 @@ function parseCompanyInfo(value: unknown): CompanyInfo {
 
 export function CompanySettings() {
   const { currentTenantId } = useTenant();
+  const toast = useToast();
   const [info, setInfo] = useState<CompanyInfo>(defaultCompanyInfo);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [expectedSolutionDays, setExpectedSolutionDays] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
@@ -55,9 +59,10 @@ export function CompanySettings() {
   useEffect(() => {
     if (!currentTenantId) return;
     (async () => {
-      const [infoRes, logoRes] = await Promise.all([
+      const [infoRes, logoRes, solutionRes] = await Promise.all([
         supabase.from('company_settings').select('value').eq('tenant_id', currentTenantId).eq('key', 'company_info').maybeSingle(),
         supabase.from('company_settings').select('value').eq('tenant_id', currentTenantId).eq('key', 'company_logo_url').maybeSingle(),
+        supabase.from('company_settings').select('value').eq('tenant_id', currentTenantId).eq('key', 'expected_solution_days').maybeSingle(),
       ]);
       if (infoRes.error) {
         setInfo(defaultCompanyInfo);
@@ -66,6 +71,8 @@ export function CompanySettings() {
       }
       const logoVal = (logoRes.data as { value: unknown } | null)?.value;
       setLogoUrl(typeof logoVal === 'string' ? logoVal : null);
+      const daysVal = (solutionRes.data as { value: unknown } | null)?.value;
+      setExpectedSolutionDays(typeof daysVal === 'number' ? daysVal : Number(daysVal) || 0);
       setLoading(false);
     })();
   }, [currentTenantId]);
@@ -75,22 +82,28 @@ export function CompanySettings() {
     setError(null);
     setSaved(false);
     setSaving(true);
-    const { error: e } = await supabase
-      .from('company_settings')
-      .upsert(
-        {
-          tenant_id: currentTenantId,
-          key: 'company_info',
-          value: info,
-          updated_at: new Date().toISOString(),
-        },
+    const days = Math.max(0, Math.min(365, expectedSolutionDays));
+    const [infoErr, daysErr] = await Promise.all([
+      supabase.from('company_settings').upsert(
+        { tenant_id: currentTenantId, key: 'company_info', value: info, updated_at: new Date().toISOString() },
         { onConflict: 'tenant_id,key' }
-      );
-    if (e) {
-      setError(e.message || 'Kunne ikke lagre');
+      ),
+      supabase.from('company_settings').upsert(
+        { tenant_id: currentTenantId, key: 'expected_solution_days', value: days, updated_at: new Date().toISOString() },
+        { onConflict: 'tenant_id,key' }
+      ),
+    ]);
+    if (infoErr.error) {
+      setError(infoErr.error.message || 'Kunne ikke lagre');
+      toast.error(infoErr.error.message || 'Kunne ikke lagre selskapsopplysninger');
+    } else if (daysErr.error) {
+      setError(daysErr.error.message || 'Kunne ikke lagre');
+      toast.error(daysErr.error.message || 'Kunne ikke lagre selskapsopplysninger');
     } else {
+      setExpectedSolutionDays(days);
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);
+      toast.success('Selskapsopplysninger er lagret');
     }
     setSaving(false);
   };
@@ -311,15 +324,34 @@ export function CompanySettings() {
               )}
             </div>
 
-            <button
-              type="button"
+            <h3 className="text-sm font-medium text-[var(--hiver-text-muted)] mt-8 mb-3 uppercase tracking-wide flex items-center gap-2">
+              <Ticket className="w-4 h-4" />
+              Saker (forventet løsningstid)
+            </h3>
+            <p className="text-sm text-[var(--hiver-text-muted)] mb-3">
+              Antall dager fra mottak til forventet løsning. Nye saker får automatisk forventet frist. Sett 0 for å ikke bruke.
+            </p>
+            <div>
+              <label className={labelClass}>Forventet løsningstid (dager)</label>
+              <input
+                type="number"
+                min={0}
+                max={365}
+                value={expectedSolutionDays || ''}
+                onChange={(e) => setExpectedSolutionDays(Math.max(0, parseInt(e.target.value, 10) || 0))}
+                placeholder="0"
+                className={inputClass}
+              />
+            </div>
+
+            <SaveButton
+              loading={saving}
               onClick={handleSave}
-              disabled={saving}
-              className="mt-4 inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50"
+              icon={<Save className="w-4 h-4" />}
+              className="mt-4"
             >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
               Lagre selskapsopplysninger
-            </button>
+            </SaveButton>
           </>
         )}
       </section>

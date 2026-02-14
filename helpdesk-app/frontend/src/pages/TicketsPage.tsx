@@ -6,17 +6,18 @@ import { useTickets, type AssignmentView } from '../contexts/TicketContext';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../services/supabase';
 import { sendGmailForward } from '../services/api';
+import { List } from 'lucide-react';
 
 const VIEWS: { view: AssignmentView; label: string }[] = [
   { view: 'mine', label: 'Mine' },
   { view: 'unassigned', label: 'Ufordelte' },
   { view: 'team', label: 'Team' },
-  { view: 'all', label: 'Alle' },
+  { view: 'all', label: 'Alle åpne saker' },
   { view: 'archived', label: 'Arkivert' },
 ];
 
 const VIEW_LABELS: Record<AssignmentView, string> = {
-  all: 'Alle',
+  all: 'Alle åpne saker',
   mine: 'Mine',
   unassigned: 'Ufordelte',
   team: 'Team',
@@ -26,22 +27,31 @@ const VIEW_LABELS: Record<AssignmentView, string> = {
 export function TicketsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { currentTenantId } = useTenant();
-  const { createTicket, selectTicket, assignmentView, setAssignmentView, tickets, viewCounts } = useTickets();
+  const { createTicket, selectTicket, selectedTicket, assignmentView, setAssignmentView, tickets, viewCounts } = useTickets();
   const [showNew, setShowNew] = useState(false);
   const [subject, setSubject] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  // On initial mount / reload only: default to Mine tab. (Empty deps = run once per mount so tab switches are not overwritten.)
+  const selectId = searchParams.get('select');
+  const urlView = searchParams.get('view');
+  const openNew = searchParams.get('new') === '1';
+  /** On small screens: when a ticket is selected, list is hidden by default; toggle opens overlay. */
+  const [listOverlayOpen, setListOverlayOpen] = useState(false);
+
+  // Sync view from URL on mount / when navigating from notification link (e.g. /tickets?view=all&select=id)
   useEffect(() => {
-    setAssignmentView('mine');
-    setSearchParams({ view: 'mine' }, { replace: true });
+    const view = (urlView && VIEW_LABELS[urlView as AssignmentView] ? urlView : 'mine') as AssignmentView;
+    setAssignmentView(view);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (!next.has('view')) next.set('view', view);
+      return next;
+    }, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const selectId = searchParams.get('select');
-  const openNew = searchParams.get('new') === '1';
   useEffect(() => {
     if (!selectId || tickets.length === 0) return;
     const ticket = tickets.find((t) => t.id === selectId);
@@ -93,11 +103,29 @@ export function TicketsPage() {
         }
       }
     }
+    let due_date: string | null = null;
+    if (currentTenantId) {
+      const { data: setting } = await supabase
+        .from('company_settings')
+        .select('value')
+        .eq('tenant_id', currentTenantId)
+        .eq('key', 'expected_solution_days')
+        .maybeSingle();
+      const days = typeof (setting as { value?: unknown } | null)?.value === 'number'
+        ? (setting as { value: number }).value
+        : 0;
+      if (days > 0) {
+        const d = new Date();
+        d.setDate(d.getDate() + days);
+        due_date = d.toISOString();
+      }
+    }
     const ticket = await createTicket({
       subject: subject.trim(),
       customer_id: customerId,
       status: 'open',
       priority: 'medium',
+      due_date,
     });
     if (ticket) {
       if (email) {
@@ -189,15 +217,45 @@ export function TicketsPage() {
         ))}
       </div>
 
-      <div className="flex-1 flex min-h-0 gap-4">
-        <div className="rounded-xl overflow-hidden border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] shadow-[var(--hiver-shadow)] min-w-0 shrink-0 w-full max-w-md">
+      <div className="flex-1 flex min-h-0 gap-4 relative">
+        {/* List: on md+ always visible; on small screens overlay when listOverlayOpen, else hidden when a ticket is selected */}
+        <div
+          className={`
+            rounded-xl overflow-hidden border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] shadow-[var(--hiver-shadow)] flex flex-col
+            md:min-w-0 md:shrink-0 md:w-full md:max-w-md
+            max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-20 max-md:rounded-none max-md:border-0 max-md:shadow-xl
+            ${selectedTicket && !listOverlayOpen ? 'max-md:hidden' : 'max-md:flex'}
+            ${selectedTicket && listOverlayOpen ? 'max-md:w-[min(100%,20rem)]' : 'max-md:w-full max-md:max-w-full'}
+          `}
+        >
           <TicketList
             listHeaderTitle={VIEW_LABELS[assignmentView]}
             filteringModeLabel={VIEW_LABELS[assignmentView]}
             onNewTicket={() => setShowNew(true)}
+            onSelectTicket={() => setListOverlayOpen(false)}
+            overlayCloseButton={selectedTicket ? () => setListOverlayOpen(false) : undefined}
           />
         </div>
-        <div className="flex-1 min-w-0 flex rounded-xl overflow-hidden border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] shadow-[var(--hiver-shadow)]">
+        {/* Backdrop when list overlay is open on small screen */}
+        {listOverlayOpen && (
+          <div
+            className="fixed inset-0 bg-black/40 z-10 md:hidden"
+            aria-hidden
+            onClick={() => setListOverlayOpen(false)}
+          />
+        )}
+        {/* Detail: full width on small when ticket selected; show "open list" button */}
+        <div className="flex-1 min-w-0 flex rounded-xl overflow-hidden border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] shadow-[var(--hiver-shadow)] relative">
+          {selectedTicket && (
+            <button
+              type="button"
+              onClick={() => setListOverlayOpen(true)}
+              className="md:hidden absolute top-2 left-2 z-10 p-2 rounded-lg bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-text)] shadow-sm"
+              aria-label="Åpne samtalerliste"
+            >
+              <List className="w-5 h-5" />
+            </button>
+          )}
           <TicketDetail />
         </div>
       </div>

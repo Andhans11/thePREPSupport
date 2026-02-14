@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Plus, Clock, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../../services/supabase';
+import { useTenant } from '../../contexts/TenantContext';
+import { useToast } from '../../contexts/ToastContext';
 import { Select } from '../ui/Select';
+import { SaveButton } from '../ui/SaveButton';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const;
 const DAY_LABELS: Record<string, string> = {
@@ -71,6 +74,8 @@ const defaultSchedule: Record<string, { start: string; end: string } | null> = {
 };
 
 export function BusinessHoursSettings() {
+  const { currentTenantId } = useTenant();
+  const toast = useToast();
   const [templates, setTemplates] = useState<BusinessHourTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -84,19 +89,26 @@ export function BusinessHoursSettings() {
   const [saving, setSaving] = useState(false);
 
   const fetchTemplates = async () => {
+    if (!currentTenantId) return;
     const { data } = await supabase
       .from('business_hour_templates')
       .select('id, name, timezone, schedule, is_default')
+      .eq('tenant_id', currentTenantId)
       .order('name');
     setTemplates((data as BusinessHourTemplate[]) ?? []);
   };
 
   useEffect(() => {
+    if (!currentTenantId) {
+      setTemplates([]);
+      setLoading(false);
+      return;
+    }
     (async () => {
       await fetchTemplates();
       setLoading(false);
     })();
-  }, []);
+  }, [currentTenantId]);
 
   const resetForm = () => {
     setFormName('');
@@ -111,6 +123,10 @@ export function BusinessHoursSettings() {
       setError('Navn er påkrevd.');
       return;
     }
+    if (!currentTenantId) {
+      setError('Ingen tenant valgt.');
+      return;
+    }
     setError(null);
     setSaving(true);
     const payload = { name: formName.trim(), timezone: formTimezone, schedule: formSchedule };
@@ -119,17 +135,25 @@ export function BusinessHoursSettings() {
         .from('business_hour_templates')
         .update(payload)
         .eq('id', editingId);
-      if (e) setError(e.message);
-      else {
+      if (e) {
+        setError(e.message);
+        toast.error(e.message);
+      } else {
         await fetchTemplates();
         resetForm();
+        toast.success('Åpningstidsmal er oppdatert');
       }
     } else {
-      const { error: e } = await supabase.from('business_hour_templates').insert(payload);
-      if (e) setError(e.message);
-      else {
+      const { error: e } = await supabase
+        .from('business_hour_templates')
+        .insert({ ...payload, tenant_id: currentTenantId });
+      if (e) {
+        setError(e.message);
+        toast.error(e.message);
+      } else {
         await fetchTemplates();
         resetForm();
+        toast.success('Åpningstidsmal er opprettet');
       }
     }
     setSaving(false);
@@ -137,14 +161,28 @@ export function BusinessHoursSettings() {
 
   const handleDelete = async (id: string) => {
     if (!confirm('Slette denne åpningstidsmalen?')) return;
-    const { error: e } = await supabase.from('business_hour_templates').delete().eq('id', id);
+    if (!currentTenantId) return;
+    const { error: e } = await supabase
+      .from('business_hour_templates')
+      .delete()
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
     if (e) setError(e.message);
     else await fetchTemplates();
   };
 
   const setDefault = async (id: string) => {
-    await supabase.from('business_hour_templates').update({ is_default: false }).neq('id', id);
-    await supabase.from('business_hour_templates').update({ is_default: true }).eq('id', id);
+    if (!currentTenantId) return;
+    await supabase
+      .from('business_hour_templates')
+      .update({ is_default: false })
+      .eq('tenant_id', currentTenantId)
+      .neq('id', id);
+    await supabase
+      .from('business_hour_templates')
+      .update({ is_default: true })
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
     await fetchTemplates();
   };
 
@@ -277,15 +315,9 @@ export function BusinessHoursSettings() {
             </div>
           </div>
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium disabled:opacity-50"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
+            <SaveButton onClick={handleSave} loading={saving}>
               Lagre
-            </button>
+            </SaveButton>
             <button type="button" onClick={resetForm} className="px-4 py-2 rounded-lg border border-[var(--hiver-border)] text-sm font-medium">
               Avbryt
             </button>

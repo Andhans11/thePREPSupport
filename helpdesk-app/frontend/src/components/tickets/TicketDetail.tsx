@@ -11,6 +11,8 @@ import { TicketMessage } from './TicketMessage';
 import { ReplyBox } from './ReplyBox';
 import { ForwardBox } from './ForwardBox';
 import { Select } from '../ui/Select';
+import { SaveButton } from '../ui/SaveButton';
+import { useToast } from '../../contexts/ToastContext';
 import {
   User,
   MessageSquare,
@@ -49,23 +51,48 @@ interface TeamOption {
   name: string;
 }
 
+interface MentionMember {
+  user_id: string;
+  name: string;
+}
+
+/** Extract unique user IDs from note content with @[Name](user_id) mentions */
+function extractMentionedUserIds(content: string): string[] {
+  const re = /@\[[^\]]*\]\(([a-f0-9-]{36})\)/gi;
+  const ids: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content)) !== null) {
+    if (m[1] && !ids.includes(m[1])) ids.push(m[1]);
+  }
+  return ids;
+}
+
 export function TicketDetail() {
   const { selectedTicket, messages, updateTicket, selectTicket, addMessage, fetchMessages } = useTickets();
   const { user } = useAuth();
+  const toast = useToast();
   const { statuses, categories } = useMasterData();
   const gmail = useGmail();
   const supportEmail = gmail?.groupEmail?.trim() || gmail?.gmailEmail?.trim() || null;
   const [teams, setTeams] = useState<TeamOption[]>([]);
   const [notesTab, setNotesTab] = useState<'activities' | 'notes'>('activities');
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isSmallScreen, setIsSmallScreen] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches
+  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches
+  );
   const [showReplyBox, setShowReplyBox] = useState(false);
   const [composeMode, setComposeMode] = useState<'reply' | 'replyAll' | 'forward'>('reply');
   const [sidebarTab, setSidebarTab] = useState<'details' | 'contact'>('details');
   const [newTag, setNewTag] = useState('');
   const [showAddNoteForm, setShowAddNoteForm] = useState(false);
   const [newNoteContent, setNewNoteContent] = useState('');
+  const [noteCursorPos, setNoteCursorPos] = useState(0);
   const [savingNote, setSavingNote] = useState(false);
+  const [mentionMembers, setMentionMembers] = useState<MentionMember[]>([]);
   const mainScrollRef = useRef<HTMLDivElement>(null);
+  const noteTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   const { currentTenantId } = useTenant();
   useEffect(() => {
@@ -74,10 +101,52 @@ export function TicketDetail() {
   }, [currentTenantId]);
 
   useEffect(() => {
+    if (!currentTenantId) return;
+    supabase
+      .from('team_members')
+      .select('user_id, name')
+      .eq('tenant_id', currentTenantId)
+      .not('user_id', 'is', null)
+      .eq('is_active', true)
+      .order('name')
+      .then(({ data }) => setMentionMembers((data as MentionMember[]) ?? []));
+  }, [currentTenantId]);
+
+  const { mentionQuery, mentionStartIndex } = (() => {
+    if (noteCursorPos <= 0 || !newNoteContent) return { mentionQuery: null as string | null, mentionStartIndex: -1 };
+    const beforeCursor = newNoteContent.slice(0, noteCursorPos);
+    const lastAt = beforeCursor.lastIndexOf('@');
+    if (lastAt === -1) return { mentionQuery: null, mentionStartIndex: -1 };
+    const afterAt = beforeCursor.slice(lastAt + 1);
+    if (/[\s\n\[\]()]/.test(afterAt)) return { mentionQuery: null, mentionStartIndex: -1 };
+    return { mentionQuery: afterAt, mentionStartIndex: lastAt };
+  })();
+
+  const filteredMentionMembers = mentionQuery == null
+    ? []
+    : mentionMembers.filter(
+        (m) =>
+          m.name.toLowerCase().includes(mentionQuery.toLowerCase())
+      ).slice(0, 8);
+  const showMentionDropdown = mentionQuery !== null && filteredMentionMembers.length > 0;
+
+  useEffect(() => {
     if (showReplyBox && mainScrollRef.current) {
       mainScrollRef.current.scrollTop = 0;
     }
   }, [showReplyBox]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1023px)');
+    const handle = () => {
+      const small = mq.matches;
+      setIsSmallScreen(small);
+      if (small) setSidebarCollapsed(true);
+    };
+    handle();
+    mq.addEventListener('change', handle);
+    return () => mq.removeEventListener('change', handle);
+  }, []);
 
   if (!selectedTicket) {
     return (
@@ -89,12 +158,6 @@ export function TicketDetail() {
 
   const customer = selectedTicket.customer;
   const customerEmail = customer?.email ?? '';
-  const assigneeLabel = selectedTicket.assigned_to
-    ? selectedTicket.assigned_to === user?.id
-      ? 'Deg'
-      : 'Tildelt'
-    : 'Ingen';
-  const canAssignToMe = !selectedTicket.assigned_to || selectedTicket.assigned_to !== user?.id;
 
   const firstMessage = messages.find((m) => m.is_customer && !m.is_internal_note) ?? messages[0];
   const messagesNewestFirst = [...messages].reverse();
@@ -109,19 +172,41 @@ export function TicketDetail() {
     const text = newNoteContent.trim();
     if (!text || !user?.email || !selectedTicket) return;
     setSavingNote(true);
-    await addMessage({
-      ticket_id: selectedTicket.id,
-      from_email: user.email,
-      from_name: user.user_metadata?.full_name ?? null,
-      content: text,
-      is_customer: false,
-      is_internal_note: true,
-    });
-    await fetchMessages(selectedTicket.id);
-    setNewNoteContent('');
-    setShowAddNoteForm(false);
-    setSavingNote(false);
-    setNotesTab('notes');
+    try {
+      const mentioned_user_ids = extractMentionedUserIds(text);
+      await addMessage({
+        ticket_id: selectedTicket.id,
+        from_email: user.email,
+        from_name: user.user_metadata?.full_name ?? null,
+        content: text,
+        is_customer: false,
+        is_internal_note: true,
+        mentioned_user_ids: mentioned_user_ids.length ? mentioned_user_ids : undefined,
+        created_by: user?.id,
+      });
+      await fetchMessages(selectedTicket.id);
+      setNewNoteContent('');
+      setShowAddNoteForm(false);
+      setNotesTab('notes');
+      toast.success('Notat er lagret');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Kunne ikke lagre notat');
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const insertMention = (member: MentionMember) => {
+    const before = newNoteContent.slice(0, mentionStartIndex);
+    const after = newNoteContent.slice(noteCursorPos);
+    const mention = `@[${member.name}](${member.user_id})`;
+    const next = before + mention + after;
+    setNewNoteContent(next);
+    setNoteCursorPos(before.length + mention.length);
+    noteTextareaRef.current?.focus();
+    setTimeout(() => {
+      noteTextareaRef.current?.setSelectionRange(before.length + mention.length, before.length + mention.length);
+    }, 0);
   };
 
   return (
@@ -312,9 +397,24 @@ export function TicketDetail() {
         </div>
       </div>
 
-      {/* Right: Support sidebar (replicated from reference) */}
+      {/* Right: Support sidebar — overlay on small screens, inline on large */}
       {!sidebarCollapsed && (
-        <aside className="w-80 shrink-0 flex flex-col border-l border-[var(--hiver-border)] bg-white">
+        <>
+          {isSmallScreen && (
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(true)}
+              className="fixed inset-0 z-40 bg-black/40"
+              aria-label="Lukk Support-panel"
+            />
+          )}
+          <aside
+            className={`shrink-0 flex flex-col border-l border-[var(--hiver-border)] bg-white ${
+              isSmallScreen
+                ? 'fixed top-0 right-0 bottom-0 z-50 w-[min(20rem,100vw)] shadow-xl'
+                : 'w-80'
+            }`}
+          >
           <div className="shrink-0 flex items-center justify-between p-3 border-b border-[var(--hiver-border)]">
             <h3 className="text-sm font-semibold text-[var(--hiver-text)]">
               Support
@@ -385,15 +485,22 @@ export function TicketDetail() {
               <>
                 {/* Compact grid: Tildelt, Status, Kategori, Merker + pills */}
                 <div className="grid grid-cols-2 gap-x-3 gap-y-2 shrink-0 mb-2">
-                  <div>
+                  <div className="col-span-2">
                     <label className="text-[10px] font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Tildelt</label>
-                    <div className="flex items-center gap-1 flex-wrap mt-0.5">
-                      <span className="text-xs text-[var(--hiver-text)]">{assigneeLabel}</span>
-                      {canAssignToMe && user && (
-                        <button type="button" onClick={() => updateTicket(selectedTicket.id, { assigned_to: user.id })} className="text-[10px] text-[var(--hiver-accent)] hover:underline">
-                          Tildel meg
-                        </button>
-                      )}
+                    <div className="mt-0.5">
+                      <Select
+                        value={selectedTicket.assigned_to ?? ''}
+                        onChange={(v) => updateTicket(selectedTicket.id, { assigned_to: v || null })}
+                        options={[
+                          { value: '', label: 'Ingen' },
+                          ...mentionMembers.map((m) => ({
+                            value: m.user_id,
+                            label: m.user_id === user?.id ? 'Deg' : m.name,
+                          })),
+                        ]}
+                        size="sm"
+                        className="w-full max-w-[180px]"
+                      />
                     </div>
                   </div>
                   <div>
@@ -407,6 +514,54 @@ export function TicketDetail() {
                         size="sm"
                         className="max-w-[100px]"
                       />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Prioritet</label>
+                    <div className="mt-0.5">
+                      <Select
+                        value={selectedTicket.priority ?? 'medium'}
+                        onChange={(v) => updateTicket(selectedTicket.id, { priority: (v || 'medium') as 'low' | 'medium' | 'high' | 'urgent' })}
+                        options={[
+                          { value: 'low', label: 'Lav' },
+                          { value: 'medium', label: 'Middels' },
+                          { value: 'high', label: 'Høy' },
+                          { value: 'urgent', label: 'Haster' },
+                        ]}
+                        size="sm"
+                        className="max-w-[120px]"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Mottatt</label>
+                    <p className="text-xs text-[var(--hiver-text)] mt-0.5">
+                      {selectedTicket.created_at
+                        ? new Date(selectedTicket.created_at).toLocaleDateString('nb-NO', {
+                            day: 'numeric',
+                            month: 'short',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })
+                        : '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Forventet løsningstid</label>
+                    <div className="mt-0.5 flex items-center gap-1 flex-wrap">
+                      <input
+                        type="date"
+                        value={selectedTicket.due_date ? new Date(selectedTicket.due_date).toISOString().slice(0, 10) : ''}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          updateTicket(selectedTicket.id, { due_date: v ? new Date(v).toISOString() : null });
+                        }}
+                        className="rounded border border-[var(--hiver-border)] text-xs px-2 py-1 max-w-[140px]"
+                      />
+                      {selectedTicket.due_date && new Date(selectedTicket.due_date) < new Date() && (
+                        <span className="text-[10px] font-medium text-red-600">Forfalt</span>
+                      )}
                     </div>
                   </div>
                   <div>
@@ -561,23 +716,43 @@ export function TicketDetail() {
                   Legg til notat
                 </button>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-2 relative">
                   <textarea
+                    ref={noteTextareaRef}
                     value={newNoteContent}
-                    onChange={(e) => setNewNoteContent(e.target.value)}
-                    placeholder="Skriv et intern notat…"
+                    onChange={(e) => {
+                      setNewNoteContent(e.target.value);
+                      setNoteCursorPos(e.target.selectionStart ?? 0);
+                    }}
+                    onSelect={(e) => setNoteCursorPos(e.currentTarget.selectionStart ?? 0)}
+                    placeholder="Skriv et intern notat… Skriv @ for å nevne en kollega."
                     rows={3}
                     className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-none"
                   />
+                  {showMentionDropdown && (
+                    <div className="absolute left-2 right-2 top-full mt-0.5 z-10 rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] shadow-lg py-1 max-h-48 overflow-y-auto">
+                      {filteredMentionMembers.map((m) => (
+                        <button
+                          key={m.user_id}
+                          type="button"
+                          onClick={() => insertMention(m)}
+                          className="w-full text-left px-3 py-2 text-sm text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)] flex items-center gap-2"
+                        >
+                          <User className="w-4 h-4 text-[var(--hiver-text-muted)]" />
+                          {m.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex gap-2">
-                    <button
-                      type="button"
+                    <SaveButton
                       onClick={handleSaveInternalNote}
-                      disabled={!newNoteContent.trim() || savingNote}
-                      className="flex-1 py-1.5 rounded-lg text-sm font-medium bg-[var(--hiver-accent)] text-white hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50 disabled:pointer-events-none"
+                      loading={savingNote}
+                      disabled={!newNoteContent.trim()}
+                      className="flex-1 py-1.5"
                     >
-                      {savingNote ? 'Lagrer…' : 'Lagre notat'}
-                    </button>
+                      Lagre notat
+                    </SaveButton>
                     <button
                       type="button"
                       onClick={() => { setShowAddNoteForm(false); setNewNoteContent(''); }}
@@ -637,7 +812,7 @@ export function TicketDetail() {
                             {msg.from_name || msg.from_email} · {formatMessageDate(msg.created_at)}
                           </p>
                           <div
-                            className="text-sm text-[var(--hiver-text)] break-words [&_p]:my-0.5 whitespace-pre-wrap"
+                            className="text-sm text-[var(--hiver-text)] break-words [&_p]:my-0.5 [&_.message-mention]:text-[var(--hiver-accent)] [&_.message-mention]:font-medium whitespace-pre-wrap"
                             dangerouslySetInnerHTML={{ __html: getMessageDisplayHtml(msg.html_content, msg.content) }}
                           />
                         </div>
@@ -648,7 +823,8 @@ export function TicketDetail() {
               )}
             </div>
           </div>
-        </aside>
+          </aside>
+        </>
       )}
 
       {sidebarCollapsed && (

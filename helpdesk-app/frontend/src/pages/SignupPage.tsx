@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { supabase } from '../services/supabase';
 
 const STORAGE_KEY = 'helpdesk_current_tenant_id';
+const landingFont = 'Plus Jakarta Sans, ui-sans-serif, system-ui, sans-serif';
 
 export function SignupPage() {
   const [searchParams] = useSearchParams();
@@ -39,7 +40,6 @@ export function SignupPage() {
       return;
     }
     if (isInviteFlow) {
-      // Session may be null if email confirmation is required; then we must redirect to accept-invite after login
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         const { data: acceptData, error: acceptErr } = await supabase.rpc('accept_tenant_invitation', { p_code: inviteCode });
@@ -76,16 +76,28 @@ export function SignupPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[var(--hiver-bg)] p-4">
-      <div className="card-panel w-full max-w-sm p-6 shadow-[var(--hiver-shadow-md)]">
-        <h1 className="text-xl font-semibold text-[var(--hiver-text)] text-center">Support Helpdesk</h1>
-        <p className="text-[var(--hiver-text-muted)] text-sm text-center mt-1">Opprett konto</p>
+    <div
+      className="min-h-screen flex flex-col bg-[#f8fafc] p-4"
+      style={{ fontFamily: landingFont }}
+    >
+      <div className="absolute top-4 left-4">
+        <Link
+          to="/"
+          className="text-sm font-medium text-[#64748b] hover:text-[#0f172a] flex items-center gap-1.5"
+        >
+          ← Tilbake til forsiden
+        </Link>
+      </div>
+      <div className="flex-1 flex items-center justify-center">
+        <div className="w-full max-w-sm p-6 rounded-xl border border-[#e2e8f0] bg-white shadow-sm">
+        <h1 className="text-xl font-semibold text-[#0f172a] text-center">Support Helpdesk</h1>
+        <p className="text-[#64748b] text-sm text-center mt-1">Opprett konto</p>
         <form onSubmit={handleSubmit} className="mt-6 space-y-4">
           {error && (
             <div className="p-3 rounded-lg bg-red-50 text-red-700 text-sm">{error}</div>
           )}
           <div>
-            <label htmlFor="name" className="block text-sm font-medium text-[var(--hiver-text)] mb-1">
+            <label htmlFor="name" className="block text-sm font-medium text-[#334155] mb-1">
               Navn (valgfritt)
             </label>
             <input
@@ -94,11 +106,11 @@ export function SignupPage() {
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoComplete="name"
-              className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] focus:border-[var(--hiver-accent)] focus:ring-1 focus:ring-[var(--hiver-accent)] outline-none"
+              className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm text-[#0f172a] focus:border-[#0f766e] focus:ring-1 focus:ring-[#0f766e] outline-none"
             />
           </div>
           <div>
-            <label htmlFor="email" className="block text-sm font-medium text-[var(--hiver-text)] mb-1">
+            <label htmlFor="email" className="block text-sm font-medium text-[#334155] mb-1">
               E-post
             </label>
             <input
@@ -108,11 +120,11 @@ export function SignupPage() {
               onChange={(e) => setEmail(e.target.value)}
               required
               autoComplete="email"
-              className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] focus:border-[var(--hiver-accent)] focus:ring-1 focus:ring-[var(--hiver-accent)] outline-none"
+              className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm text-[#0f172a] focus:border-[#0f766e] focus:ring-1 focus:ring-[#0f766e] outline-none"
             />
           </div>
           <div>
-            <label htmlFor="password" className="block text-sm font-medium text-[var(--hiver-text)] mb-1">
+            <label htmlFor="password" className="block text-sm font-medium text-[#334155] mb-1">
               Passord
             </label>
             <input
@@ -122,12 +134,12 @@ export function SignupPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               autoComplete="new-password"
-              className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] focus:border-[var(--hiver-accent)] focus:ring-1 focus:ring-[var(--hiver-accent)] outline-none"
+              className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm text-[#0f172a] focus:border-[#0f766e] focus:ring-1 focus:ring-[#0f766e] outline-none"
             />
           </div>
           {!isInviteFlow && (
             <div>
-              <label htmlFor="tenantName" className="block text-sm font-medium text-[var(--hiver-text)] mb-1">
+              <label htmlFor="tenantName" className="block text-sm font-medium text-[#334155] mb-1">
                 Organisasjonsnavn
               </label>
               <input
@@ -137,27 +149,28 @@ export function SignupPage() {
                 onChange={(e) => setTenantName(e.target.value)}
                 required
                 placeholder="F.eks. Mitt supportteam"
-                className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] focus:border-[var(--hiver-accent)] focus:ring-1 focus:ring-[var(--hiver-accent)] outline-none"
+                className="w-full rounded-lg border border-[#cbd5e1] px-3 py-2 text-sm text-[#0f172a] focus:border-[#0f766e] focus:ring-1 focus:ring-[#0f766e] outline-none placeholder:text-[#94a3b8]"
               />
             </div>
           )}
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50"
+            className="w-full py-2.5 rounded-lg bg-[#0f766e] text-white text-sm font-medium hover:bg-[#115e59] disabled:opacity-50 transition-colors"
           >
             {loading ? (isInviteFlow ? 'Registrerer og godtar invitasjon…' : 'Oppretter konto…') : 'Registrer deg'}
           </button>
         </form>
-        <p className="text-center text-sm text-[var(--hiver-text-muted)] mt-4">
+        <p className="text-center text-sm text-[#64748b] mt-4">
           Har du allerede en konto?{' '}
           <Link
             to={isInviteFlow ? `/login?redirect=${encodeURIComponent(`/accept-invite?code=${inviteCode}`)}` : '/login'}
-            className="text-[var(--hiver-accent)] hover:underline"
+            className="text-[#0f766e] hover:underline font-medium"
           >
             Logg inn
           </Link>
         </p>
+        </div>
       </div>
     </div>
   );

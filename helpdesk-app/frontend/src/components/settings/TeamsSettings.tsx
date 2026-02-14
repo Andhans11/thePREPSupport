@@ -9,6 +9,13 @@ export interface TeamRow {
   description: string | null;
   created_at: string;
   updated_at: string;
+  manager_team_member_id: string | null;
+}
+
+interface TeamMemberOption {
+  id: string;
+  name: string;
+  email: string;
 }
 
 export function TeamsSettings() {
@@ -20,23 +27,35 @@ export function TeamsSettings() {
   const [adding, setAdding] = useState(false);
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
+  const [formManagerId, setFormManagerId] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
+  const [teamMembers, setTeamMembers] = useState<TeamMemberOption[]>([]);
 
   const fetchTeams = async () => {
     if (!currentTenantId) return;
     setLoading(true);
-    const { data, error: e } = await supabase
-      .from('teams')
-      .select('id, name, description, created_at, updated_at')
-      .eq('tenant_id', currentTenantId)
-      .order('name');
+    const [teamsRes, membersRes] = await Promise.all([
+      supabase
+        .from('teams')
+        .select('id, name, description, created_at, updated_at, manager_team_member_id')
+        .eq('tenant_id', currentTenantId)
+        .order('name'),
+      supabase
+        .from('team_members')
+        .select('id, name, email')
+        .eq('tenant_id', currentTenantId)
+        .eq('is_active', true)
+        .order('name'),
+    ]);
+    const { data: teamsData, error: e } = teamsRes;
     if (e) {
       setError(e.message);
       setTeams([]);
     } else {
       setError(null);
-      setTeams((data as TeamRow[]) ?? []);
+      setTeams((teamsData as TeamRow[]) ?? []);
     }
+    setTeamMembers((membersRes.data as TeamMemberOption[]) ?? []);
     setLoading(false);
   };
 
@@ -52,13 +71,17 @@ export function TeamsSettings() {
     }
     setError(null);
     setSaving(id);
-    const { error: e } = await supabase.from('teams').update({ name, description: formDescription.trim() || null }).eq('id', id);
+    const { error: e } = await supabase
+      .from('teams')
+      .update({ name, description: formDescription.trim() || null, manager_team_member_id: formManagerId || null })
+      .eq('id', id);
     if (e) setError(e.message);
     else {
-      setTeams((prev) => prev.map((t) => (t.id === id ? { ...t, name, description: formDescription.trim() || null } : t)));
+      setTeams((prev) => prev.map((t) => (t.id === id ? { ...t, name, description: formDescription.trim() || null, manager_team_member_id: formManagerId } : t)));
       setEditingId(null);
       setFormName('');
       setFormDescription('');
+      setFormManagerId(null);
     }
     setSaving(null);
   };
@@ -102,6 +125,7 @@ export function TeamsSettings() {
     setEditingId(t.id);
     setFormName(t.name);
     setFormDescription(t.description ?? '');
+    setFormManagerId(t.manager_team_member_id ?? null);
     setError(null);
   };
 
@@ -110,6 +134,7 @@ export function TeamsSettings() {
     setAdding(false);
     setFormName('');
     setFormDescription('');
+    setFormManagerId(null);
     setError(null);
   };
 
@@ -207,6 +232,22 @@ export function TeamsSettings() {
                         placeholder="Beskrivelse"
                         className="rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm sm:col-span-2"
                       />
+                      <div className="sm:col-span-2">
+                        <label className="block text-sm font-medium text-[var(--hiver-text-muted)] mb-1">Leder</label>
+                        <select
+                          value={formManagerId ?? ''}
+                          onChange={(e) => setFormManagerId(e.target.value || null)}
+                          className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)]"
+                        >
+                          <option value="">Ingen</option>
+                          {teamMembers.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name || m.email}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">Lederen ser alle saker i teamet og kan håndtere status for teammedlemmer.</p>
+                      </div>
                     </div>
                     <div className="flex gap-1">
                       <button
@@ -227,6 +268,11 @@ export function TeamsSettings() {
                     <div className="min-w-0">
                       <p className="font-medium text-[var(--hiver-text)] truncate">{t.name}</p>
                       {t.description && <p className="text-sm text-[var(--hiver-text-muted)] truncate">{t.description}</p>}
+                      {t.manager_team_member_id && (
+                        <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">
+                          Leder: {teamMembers.find((m) => m.id === t.manager_team_member_id)?.name || teamMembers.find((m) => m.id === t.manager_team_member_id)?.email || '—'}
+                        </p>
+                      )}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
                       <button

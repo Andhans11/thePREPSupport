@@ -41,6 +41,7 @@ export function TicketsPage() {
   }, []);
 
   const selectId = searchParams.get('select');
+  const openNew = searchParams.get('new') === '1';
   useEffect(() => {
     if (!selectId || tickets.length === 0) return;
     const ticket = tickets.find((t) => t.id === selectId);
@@ -53,6 +54,17 @@ export function TicketsPage() {
       }, { replace: true });
     }
   }, [selectId, tickets, selectTicket, setSearchParams]);
+
+  useEffect(() => {
+    if (openNew) {
+      setShowNew(true);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('new');
+        return next;
+      }, { replace: true });
+    }
+  }, [openNew, setSearchParams]);
 
   const handleCreateTicket = async (e: React.FormEvent) => {
     e.preventDefault();

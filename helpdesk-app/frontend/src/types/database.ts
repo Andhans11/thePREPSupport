@@ -1,7 +1,7 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[];
 
 export type TicketPriority = 'low' | 'medium' | 'high' | 'urgent';
-export type TeamMemberRole = 'admin' | 'agent' | 'viewer';
+export type TeamMemberRole = 'admin' | 'manager' | 'agent' | 'viewer';
 
 export interface Database {
   public: {

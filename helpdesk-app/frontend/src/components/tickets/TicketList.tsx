@@ -11,16 +11,6 @@ import { Search, Plus, Archive, Trash2 } from 'lucide-react';
 
 const ARCHIVED_STATUS = 'archived';
 
-function getInitial(nameOrEmail: string): string {
-  const s = (nameOrEmail || '?').trim();
-  if (!s) return '?';
-  const parts = s.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase().slice(0, 2);
-  }
-  return s.slice(0, 2).toUpperCase();
-}
-
 function TicketRow({
   ticket,
   categories,
@@ -36,7 +26,8 @@ function TicketRow({
   onArchive?: () => void;
   onDelete?: () => void;
 }) {
-  const sender = ticket.customer?.name || ticket.customer?.email || 'Ukjent';
+  const senderName = ticket.customer?.name || ticket.customer?.email || 'Ukjent';
+  const senderEmail = ticket.customer?.email ?? null;
   const isNew = ticket.status === 'open';
   const cat = ticket.category ? categories.find((c) => c.name === ticket.category) : null;
   const catColor = cat?.color_hex ?? '#6b7280';
@@ -46,26 +37,30 @@ function TicketRow({
       <button
         type="button"
         onClick={onSelect}
-        className={`flex-1 min-w-0 text-left px-3 py-3 hover:bg-[var(--hiver-bg)] transition-colors flex gap-3 ${
+        className={`flex-1 min-w-0 text-left px-3 py-3 hover:bg-[var(--hiver-bg)] transition-colors flex gap-2 items-center ${
           isSelected ? 'bg-[var(--hiver-selected-bg)]' : ''
         }`}
       >
-        <div className="relative shrink-0">
-          <div className="w-9 h-9 rounded-full bg-[var(--hiver-accent)]/15 text-[var(--hiver-accent)] text-sm font-medium flex items-center justify-center">
-            {getInitial(sender)}
-          </div>
+        <div className="w-3 shrink-0 flex items-center justify-center">
           {isNew && (
             <span
-              className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-[var(--hiver-unread-dot)]"
+              className="w-2.5 h-2.5 rounded-full bg-[var(--hiver-unread-dot)]"
               aria-hidden
             />
           )}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
-            <span className="text-sm font-medium text-[var(--hiver-text)] truncate">
-              {sender}
-            </span>
+            <div className="min-w-0">
+              <span className="text-sm font-medium text-[var(--hiver-text)] truncate block">
+                {senderName}
+              </span>
+              {senderEmail && (
+                <p className="text-xs text-[var(--hiver-text-muted)] truncate mt-0.5">
+                  {senderEmail}
+                </p>
+              )}
+            </div>
             <span className="text-xs text-[var(--hiver-text-muted)] shrink-0 flex items-center gap-2">
               {ticket.ticket_number && (
                 <span className="font-mono text-[10px] bg-[var(--hiver-bg)] px-1.5 py-0.5 rounded">

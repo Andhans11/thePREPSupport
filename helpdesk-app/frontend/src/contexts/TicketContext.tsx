@@ -56,6 +56,22 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
     [currentTenantId]
   );
 
+  const getManagedTeamIds = useCallback(
+    async (userId: string | null): Promise<string[]> => {
+      if (!userId || !currentTenantId) return [];
+      const { data: member } = await supabase
+        .from('team_members')
+        .select('id')
+        .eq('user_id', userId)
+        .eq('tenant_id', currentTenantId)
+        .maybeSingle();
+      if (!member?.id) return [];
+      const { data: rows } = await supabase.from('teams').select('id').eq('manager_team_member_id', member.id).eq('tenant_id', currentTenantId);
+      return (rows ?? []).map((r) => r.id);
+    },
+    [currentTenantId]
+  );
+
   const fetchViewCounts = useCallback(
     async (userId: string | null) => {
       if (!currentTenantId) {
@@ -66,7 +82,8 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       const unassignedQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).is('assigned_to', null).neq('status', 'archived');
       const mineQ = userId ? supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).eq('assigned_to', userId).neq('status', 'archived') : Promise.resolve({ count: 0 });
       const archivedQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).eq('status', 'archived');
-      const teamIds = await getMyTeamIds(userId);
+      const [memberTeamIds, managedTeamIds] = await Promise.all([getMyTeamIds(userId), getManagedTeamIds(userId)]);
+      const teamIds = [...new Set([...memberTeamIds, ...managedTeamIds])];
       const teamQ =
         teamIds.length > 0
           ? supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).in('team_id', teamIds).neq('status', 'archived')
@@ -81,7 +98,7 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
         archived: archivedRes.count ?? 0,
       });
     },
-    [currentTenantId, getMyTeamIds]
+    [currentTenantId, getMyTeamIds, getManagedTeamIds]
   );
 
   const fetchTickets = useCallback(
@@ -120,7 +137,8 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       }
       query = query.eq('assigned_to', uid);
     } else if (view === 'team') {
-      const teamIds = await getMyTeamIds(uid);
+      const [memberTeamIds, managedTeamIds] = await Promise.all([getMyTeamIds(uid), getManagedTeamIds(uid)]);
+      const teamIds = [...new Set([...memberTeamIds, ...managedTeamIds])];
       if (teamIds.length === 0) {
         setTickets([]);
         setLoading(false);
@@ -280,6 +298,12 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
     await fetchMessages(data.ticket_id);
     if (!data.is_customer && !data.is_internal_note && user?.id) {
       await updateTicket(data.ticket_id, { assigned_to: user.id });
+    }
+    // When anything is done on the ticket (reply or internal note), set status to "under arbeid" (pending) if still open/new
+    const { data: ticketRow } = await supabase.from('tickets').select('status').eq('id', data.ticket_id).single();
+    const status = (ticketRow as { status?: string } | null)?.status;
+    if (status === 'open' || status === 'new') {
+      await updateTicket(data.ticket_id, { status: 'pending' });
     }
     return (inserted as { id: string } | null)?.id ?? null;
   };

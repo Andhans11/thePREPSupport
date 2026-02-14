@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { Plus, UserPlus, Loader2, X, Copy, Mail } from 'lucide-react';
+import { Plus, UserPlus, Loader2, X, Copy, Mail, MailPlus, Trash2 } from 'lucide-react';
 import { supabase } from '../../services/supabase';
 import { useTenant } from '../../contexts/TenantContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { ROLES, ROLE_LABELS, type Role } from '../../types/roles';
 import { sendInvitationEmail } from '../../services/api';
+import { Select } from '../ui/Select';
 
 interface TeamMemberRow {
   id: string;
@@ -13,7 +15,6 @@ interface TeamMemberRow {
   role: Role;
   is_active: boolean;
   available_for_email?: boolean;
-  available_for_chat?: boolean;
 }
 
 interface TeamOption {
@@ -28,6 +29,7 @@ interface MemberTeam {
 
 export function UsersSettings() {
   const { currentTenantId } = useTenant();
+  const { user: currentUser } = useAuth();
   const [members, setMembers] = useState<TeamMemberRow[]>([]);
   const [teams, setTeams] = useState<TeamOption[]>([]);
   const [memberTeams, setMemberTeams] = useState<MemberTeam[]>([]);
@@ -39,12 +41,15 @@ export function UsersSettings() {
   const [addRole, setAddRole] = useState<Role>('agent');
   const [saving, setSaving] = useState<string | null>(null);
   const [lastInviteLink, setLastInviteLink] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
   const fetchMembers = async () => {
     if (!currentTenantId) return;
     setLoading(true);
     const [membersRes, teamsRes, memberTeamsRes] = await Promise.all([
-      supabase.from('team_members').select('id, user_id, name, email, role, is_active, available_for_email, available_for_chat').eq('tenant_id', currentTenantId).order('name'),
+      supabase.from('team_members').select('id, user_id, name, email, role, is_active, available_for_email').eq('tenant_id', currentTenantId).order('name'),
       supabase.from('teams').select('id, name').eq('tenant_id', currentTenantId).order('name'),
       supabase.from('team_member_teams').select('team_member_id, team_id'),
     ]);
@@ -151,18 +156,76 @@ export function UsersSettings() {
     setSaving(null);
   };
 
-  const handleToggleAvailability = async (
-    id: string,
-    field: 'available_for_email' | 'available_for_chat',
-    value: boolean
-  ) => {
+  const handleToggleAvailability = async (id: string, value: boolean) => {
     setSaving(id);
     setError(null);
-    const { error: e } = await supabase.from('team_members').update({ [field]: value }).eq('id', id);
+    const { error: e } = await supabase.from('team_members').update({ available_for_email: value }).eq('id', id);
     if (e) setError(e.message);
-    else setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, [field]: value } : m)));
+    else setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, available_for_email: value } : m)));
     setSaving(null);
   };
+
+  const handleResendInvitation = async (m: TeamMemberRow) => {
+    if (!currentTenantId || m.user_id) return;
+    setError(null);
+    setResendingId(m.id);
+    try {
+      const { data: pending } = await supabase
+        .from('tenant_invitations')
+        .select('invitation_code')
+        .eq('tenant_id', currentTenantId)
+        .eq('email', m.email)
+        .is('used_at', null)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      let invitationCode: string | undefined;
+      let invitePath: string;
+      if (pending?.invitation_code) {
+        invitationCode = pending.invitation_code;
+        invitePath = `/accept-invite?code=${invitationCode}`;
+      } else {
+        const { data: rpcData, error: rpcError } = await supabase.rpc('create_tenant_invitation', {
+          p_tenant_id: currentTenantId,
+          p_email: m.email,
+          p_name: m.name,
+          p_role: m.role,
+        });
+        if (rpcError || !(rpcData as { ok?: boolean })?.ok) {
+          setError((rpcData as { error?: string })?.error ?? rpcError?.message ?? 'Kunne ikke opprette invitasjon');
+          setResendingId(null);
+          return;
+        }
+        invitationCode = (rpcData as { invitation_code?: string })?.invitation_code;
+        invitePath = (rpcData as { invite_path?: string })?.invite_path ?? `/accept-invite?code=${invitationCode}`;
+      }
+      const inviteLink = `${window.location.origin}${invitePath}`;
+      const result = await sendInvitationEmail(invitationCode ?? '', inviteLink);
+      if (result.sent) {
+        setLastInviteLink(inviteLink);
+      } else {
+        setError(result.error ?? 'E-post kunne ikke sendes.');
+      }
+    } finally {
+      setResendingId(null);
+    }
+  };
+
+  const handleDeleteMember = async (id: string) => {
+    setError(null);
+    setDeletingId(id);
+    const { error: e } = await supabase.from('team_members').delete().eq('id', id);
+    if (e) {
+      setError(e.message);
+    } else {
+      setMembers((prev) => prev.filter((m) => m.id !== id));
+      setConfirmDeleteId(null);
+    }
+    setDeletingId(null);
+  };
+
+  const adminCount = members.filter((m) => m.role === 'admin').length;
+  const currentUserId = currentUser?.id ?? null;
 
   if (loading) {
     return (
@@ -242,17 +305,12 @@ export function UsersSettings() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-sm text-[var(--hiver-text-muted)]">Rolle:</label>
-            <select
+            <Select
               value={addRole}
-              onChange={(e) => setAddRole(e.target.value as Role)}
-              className="rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
-            >
-              {ROLES.map((r) => (
-                <option key={r} value={r}>
-                  {ROLE_LABELS[r]}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setAddRole(v as Role)}
+              options={ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
+              size="lg"
+            />
             <button
               type="button"
               onClick={handleAdd}
@@ -297,19 +355,26 @@ export function UsersSettings() {
                       )}
                     </div>
                     <div className="flex items-center gap-3 flex-wrap">
-                      <select
+                      {!m.user_id && (
+                        <button
+                          type="button"
+                          onClick={() => handleResendInvitation(m)}
+                          disabled={resendingId === m.id}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-[var(--hiver-border)] text-sm text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)] disabled:opacity-50"
+                          title="Send invitasjon på nytt"
+                        >
+                          {resendingId === m.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <MailPlus className="w-4 h-4" />}
+                          Send invitasjon på nytt
+                        </button>
+                      )}
+                      <Select
                         value={m.role}
-                        onChange={(e) => handleUpdateRole(m.id, e.target.value as Role)}
+                        onChange={(v) => handleUpdateRole(m.id, v as Role)}
+                        options={ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
                         disabled={saving === m.id}
-                        className="rounded-lg border border-[var(--hiver-border)] px-2 py-1.5 text-sm text-[var(--hiver-text)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 disabled:opacity-50"
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r} value={r}>
-                            {ROLE_LABELS[r]}
-                          </option>
-                        ))}
-                      </select>
-                      <label className="flex items-center gap-2 text-sm text-[var(--hiver-text-muted)]">
+                        size="md"
+                      />
+                      <label className="flex items-center gap-2 text-sm text-[var(--hiver-text-muted)]" title={m.is_active ? 'Deaktiver bruker' : 'Aktiver bruker'}>
                         <input
                           type="checkbox"
                           checked={m.is_active}
@@ -317,28 +382,60 @@ export function UsersSettings() {
                           disabled={saving === m.id}
                           className="rounded border-[var(--hiver-border)] text-[var(--hiver-accent)] focus:ring-[var(--hiver-accent)]"
                         />
-                        Active
+                        Aktiv
                       </label>
-                      <label className="flex items-center gap-1.5 text-sm text-[var(--hiver-text-muted)]" title="Available for Email">
+                      <label className="flex items-center gap-1.5 text-sm text-[var(--hiver-text-muted)]" title="Tilgjengelig for e-post">
                         <input
                           type="checkbox"
                           checked={m.available_for_email !== false}
-                          onChange={(e) => handleToggleAvailability(m.id, 'available_for_email', e.target.checked)}
+                          onChange={(e) => handleToggleAvailability(m.id, e.target.checked)}
                           disabled={saving === m.id}
                           className="rounded border-[var(--hiver-border)] text-[var(--hiver-accent)] focus:ring-[var(--hiver-accent)]"
                         />
                         E-post
                       </label>
-                      <label className="flex items-center gap-1.5 text-sm text-[var(--hiver-text-muted)]" title="Available for Chat">
-                        <input
-                          type="checkbox"
-                          checked={m.available_for_chat !== false}
-                          onChange={(e) => handleToggleAvailability(m.id, 'available_for_chat', e.target.checked)}
-                          disabled={saving === m.id}
-                          className="rounded border-[var(--hiver-border)] text-[var(--hiver-accent)] focus:ring-[var(--hiver-accent)]"
-                        />
-                        Chat
-                      </label>
+                      {confirmDeleteId === m.id ? (
+                        <span className="flex items-center gap-2 text-sm">
+                          <span className="text-amber-700">Slette?</span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteMember(m.id)}
+                            disabled={deletingId === m.id}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-red-600 text-white text-xs font-medium hover:bg-red-700 disabled:opacity-50"
+                          >
+                            {deletingId === m.id ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
+                            Ja, slett
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-1 rounded border border-[var(--hiver-border)] text-xs text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]"
+                          >
+                            Avbryt
+                          </button>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(m.id)}
+                          disabled={
+                            saving === m.id ||
+                            (m.user_id !== null && m.user_id === currentUserId) ||
+                            (m.role === 'admin' && adminCount <= 1)
+                          }
+                          className="inline-flex items-center gap-1 p-1.5 rounded-lg text-red-600 hover:bg-red-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                          title={
+                            m.user_id === currentUserId
+                              ? 'Du kan ikke slette deg selv'
+                              : m.role === 'admin' && adminCount <= 1
+                                ? 'Kan ikke slette siste admin'
+                                : 'Slett bruker'
+                          }
+                          aria-label="Slett bruker"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5 text-sm">
@@ -364,23 +461,15 @@ export function UsersSettings() {
                       ) : null;
                     })}
                     {availableTeams.length > 0 && (
-                      <select
+                      <Select
                         value=""
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (v) handleAddMemberToTeam(m.id, v);
-                          e.target.value = '';
-                        }}
+                        onChange={(v) => v && handleAddMemberToTeam(m.id, v)}
+                        options={availableTeams.map((t) => ({ value: t.id, label: t.name }))}
+                        placeholder="Legg til team…"
                         disabled={saving === m.id}
-                        className="rounded border border-[var(--hiver-border)] px-2 py-1 text-xs text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 disabled:opacity-50"
-                      >
-                        <option value="">Legg til team…</option>
-                        {availableTeams.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.name}
-                          </option>
-                        ))}
-                      </select>
+                        size="sm"
+                        className="max-w-[140px] text-xs"
+                      />
                     )}
                   </div>
                 </li>

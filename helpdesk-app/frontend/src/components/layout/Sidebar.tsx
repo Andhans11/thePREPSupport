@@ -7,17 +7,21 @@ import {
   Calendar,
   Settings,
 } from 'lucide-react';
+import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
+import { canAccessSettings } from '../../types/roles';
 
 const MAIN_NAV = [
   { to: '/', label: 'Dashbord', icon: LayoutDashboard },
   { to: '/tickets', label: 'Saker', icon: Ticket },
+  { to: '/planning', label: 'Planlegging', icon: Calendar },
   { to: '/customers', label: 'Kunder', icon: Users },
   { to: '/analytics', label: 'Analyse', icon: BarChart3 },
-  { to: '/planning', label: 'Kapasitetsplanlegging', icon: Calendar },
 ] as const;
 
 export function Sidebar() {
   const location = useLocation();
+  const { role } = useCurrentUserRole();
+  const showSettings = canAccessSettings(role);
 
   return (
     <aside className="w-56 flex flex-col bg-[var(--hiver-sidebar-bg)] border-r border-[var(--hiver-border)] shrink-0">
@@ -48,19 +52,21 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <div className="p-3 border-t border-[var(--hiver-border)]">
-        <Link
-          to="/settings"
-          className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-            location.pathname === '/settings' || location.pathname.startsWith('/settings')
-              ? 'bg-[var(--hiver-selected-bg)] text-[var(--hiver-accent)]'
-              : 'text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]'
-          }`}
-        >
-          <Settings className="w-5 h-5 shrink-0" />
-          Innstillinger
-        </Link>
-      </div>
+      {showSettings && (
+        <div className="p-3 border-t border-[var(--hiver-border)]">
+          <Link
+            to="/settings"
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              location.pathname === '/settings' || location.pathname.startsWith('/settings')
+                ? 'bg-[var(--hiver-selected-bg)] text-[var(--hiver-accent)]'
+                : 'text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]'
+            }`}
+          >
+            <Settings className="w-5 h-5 shrink-0" />
+            Innstillinger
+          </Link>
+        </div>
+      )}
     </aside>
   );
 }

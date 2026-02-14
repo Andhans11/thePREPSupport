@@ -36,6 +36,31 @@ function htmlHasImages(html: string): boolean {
   return /<img\s[^>]*?src\s*=\s*["']/i.test(html);
 }
 
+type InlinePart = { contentId: string; mimeType: string; base64: string };
+
+/**
+ * Replace data: URL images in HTML with cid: references and return inline parts.
+ * This prevents email clients from showing the same image twice (inline + as attachment).
+ */
+function inlineDataUrlsAsCid(html: string): { html: string; parts: InlinePart[] } {
+  const parts: InlinePart[] = [];
+  let index = 0;
+  const htmlOut = html.replace(
+    /<img\s([^>]*?)src\s*=\s*["'](data:([^;]+);base64,([^"']+))["']([^>]*)>/gi,
+    (_match, before, _dataUrl, mimeType, base64, after) => {
+      const contentId = `img_${index}_${Date.now()}`;
+      index += 1;
+      parts.push({
+        contentId,
+        mimeType: mimeType?.trim() || 'image/png',
+        base64: (base64 ?? '').replace(/\s/g, ''),
+      });
+      return `<img ${before}src="cid:${contentId}"${after}>`;
+    }
+  );
+  return { html: htmlOut, parts };
+}
+
 async function getAccessToken(refreshToken: string): Promise<string> {
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
@@ -182,38 +207,74 @@ serve(async (req) => {
   const plainNormalized = message.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
   const subjectHeader = `Subject: ${subjectNormalized}`;
   const htmlForEmail = html?.trim() ? deduplicateImagesInHtml(html.trim()) : html;
+  const htmlNormalized = htmlForEmail?.trim() ? htmlForEmail.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n') : '';
+  const inlineResult = htmlNormalized ? inlineDataUrlsAsCid(htmlNormalized) : null;
+  const hasInlineImageParts = (inlineResult?.parts.length ?? 0) > 0;
+
+  function buildHtmlBodyPart(): string {
+    if (!htmlNormalized) {
+      return [
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        plainNormalized,
+      ].join('\r\n');
+    }
+    if (hasInlineImageParts && inlineResult) {
+      const relatedBoundary = '----=_Related_' + Math.random().toString(36).slice(2) + '_' + Date.now();
+      const htmlPart = [
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        inlineResult.html,
+      ].join('\r\n');
+      const imageParts = inlineResult.parts
+        .map(
+          (p) =>
+            [
+              `--${relatedBoundary}`,
+              `Content-Type: ${p.mimeType}`,
+              'Content-Transfer-Encoding: base64',
+              `Content-Disposition: inline; filename="${p.contentId}"`,
+              `Content-ID: <${p.contentId}>`,
+              '',
+              p.base64,
+            ].join('\r\n')
+        )
+        .join('\r\n');
+      return [
+        `Content-Type: multipart/related; boundary="${relatedBoundary}"`,
+        '',
+        `--${relatedBoundary}`,
+        htmlPart,
+        imageParts,
+        `--${relatedBoundary}--`,
+      ].join('\r\n');
+    }
+    if (htmlHasImages(htmlNormalized)) {
+      return [
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        htmlNormalized,
+      ].join('\r\n');
+    }
+    const altBoundary = '----=_Alt_' + Math.random().toString(36).slice(2) + '_' + Date.now();
+    return [
+      `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
+      '',
+      `--${altBoundary}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      plainNormalized,
+      `--${altBoundary}`,
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      htmlNormalized,
+      `--${altBoundary}--`,
+    ].join('\r\n');
+  }
+
   let raw: string;
   if (attachment?.filename && attachment?.contentBase64) {
-    const bodyPart = htmlForEmail && htmlForEmail.trim()
-      ? (() => {
-          const htmlNormalized = htmlForEmail.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
-          if (htmlHasImages(htmlNormalized)) {
-            return [
-              'Content-Type: text/html; charset=utf-8',
-              '',
-              htmlNormalized,
-            ].join('\r\n');
-          }
-          const altBoundary = '----=_Alt_' + Math.random().toString(36).slice(2) + '_' + Date.now();
-          return [
-            `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
-            '',
-            `--${altBoundary}`,
-            'Content-Type: text/plain; charset=utf-8',
-            '',
-            plainNormalized,
-            `--${altBoundary}`,
-            'Content-Type: text/html; charset=utf-8',
-            '',
-            htmlNormalized,
-            `--${altBoundary}--`,
-          ].join('\r\n');
-        })()
-      : [
-          'Content-Type: text/plain; charset=utf-8',
-          '',
-          plainNormalized,
-        ].join('\r\n');
+    const bodyPart = buildHtmlBodyPart();
     const mixedBoundary = '----=_Mixed_' + Math.random().toString(36).slice(2) + '_' + Date.now();
     const mimeType = attachment.mimeType || 'application/octet-stream';
     const base64Content = attachment.contentBase64.replace(/\r?\n/g, '');
@@ -235,10 +296,15 @@ serve(async (req) => {
       `--${mixedBoundary}--`,
     ].join('\r\n');
   } else if (htmlForEmail && htmlForEmail.trim()) {
-    const htmlNormalized = htmlForEmail.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
-    const hasImages = htmlHasImages(htmlNormalized);
-    if (hasImages) {
-      // Send HTML only when body has images so the client doesn't show images twice (e.g. inline + as "attachment").
+    if (hasInlineImageParts) {
+      raw = [
+        fromHeader,
+        `To: ${to}`,
+        subjectHeader,
+        'MIME-Version: 1.0',
+        buildHtmlBodyPart(),
+      ].join('\r\n');
+    } else if (htmlHasImages(htmlNormalized)) {
       raw = [
         fromHeader,
         `To: ${to}`,

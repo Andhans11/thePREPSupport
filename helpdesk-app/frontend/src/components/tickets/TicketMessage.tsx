@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { Message, MessageAttachment } from '../../types/message';
 import { formatDateTime } from '../../utils/formatters';
 import { getMessageDisplayHtml } from '../../utils/sanitizeHtml';
 import { supabase } from '../../services/supabase';
-import { Reply, ReplyAll, Forward, Paperclip } from 'lucide-react';
+import { Reply, ReplyAll, Forward, Paperclip, X } from 'lucide-react';
 
 interface TicketMessageProps {
   message: Message;
@@ -28,6 +28,11 @@ function isMessageAttachment(a: unknown): a is MessageAttachment {
   return typeof a === 'object' && a !== null && 'storage_path' in a && 'filename' in a;
 }
 
+function isImageAttachment(a: MessageAttachment): boolean {
+  const mime = (a.mime_type || '').toLowerCase();
+  return mime.startsWith('image/');
+}
+
 export function TicketMessage({
   message,
   customerEmail = '',
@@ -40,7 +45,22 @@ export function TicketMessage({
   const [hover, setHover] = useState(false);
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
   const [failedPaths, setFailedPaths] = useState<Set<string>>(new Set());
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const attachments = Array.isArray(message.attachments) ? message.attachments.filter(isMessageAttachment) : [];
+  const imageAttachments = attachments.filter(isImageAttachment);
+  const nonImageAttachments = attachments.filter((a) => !isImageAttachment(a));
+
+  const closeLightbox = useCallback(() => setLightboxUrl(null), []);
+  useEffect(() => {
+    if (!lightboxUrl) return;
+    const onEscape = (e: KeyboardEvent) => { if (e.key === 'Escape') closeLightbox(); };
+    document.addEventListener('keydown', onEscape);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onEscape);
+      document.body.style.overflow = '';
+    };
+  }, [lightboxUrl, closeLightbox]);
   useEffect(() => {
     if (attachments.length === 0) return;
     const load = async () => {
@@ -146,9 +166,48 @@ export function TicketMessage({
         <div><span className="font-medium text-slate-600">Fra:</span> {fromLabel}</div>
         <div><span className="font-medium text-slate-600">Til:</span> {toLabel}</div>
       </div>
-      {attachments.length > 0 && (
+      {/* Inline images (e.g. pasted in email): show as thumbnails, click to lightbox */}
+      {imageAttachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
-          {attachments.map((a) => {
+          {imageAttachments.map((a) => {
+            const path = String(a.storage_path).trim();
+            const url = path ? signedUrls[path] : null;
+            const unavailable = path && failedPaths.has(path);
+            if (url) {
+              return (
+                <button
+                  key={path}
+                  type="button"
+                  onClick={() => setLightboxUrl(url)}
+                  className="rounded-lg border border-slate-200 bg-slate-50 overflow-hidden hover:border-[var(--hiver-accent)] hover:ring-2 hover:ring-[var(--hiver-accent)]/20 focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/40"
+                  title={`${a.filename} – Klikk for å åpne`}
+                >
+                  <img
+                    src={url}
+                    alt={a.filename}
+                    className="block max-h-40 w-auto max-w-full object-contain"
+                  />
+                </button>
+              );
+            }
+            return (
+              <span
+                key={path || a.filename}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500"
+                title={unavailable ? 'Filen finnes ikke eller du har ikke tilgang' : 'Laster…'}
+              >
+                <span className="truncate max-w-[180px]">{a.filename}</span>
+                {a.size != null && <span className="text-xs text-slate-400">({(a.size / 1024).toFixed(1)} KB)</span>}
+                {unavailable && <span className="text-xs">(ikke tilgjengelig)</span>}
+              </span>
+            );
+          })}
+        </div>
+      )}
+      {/* Non-image attachments: download links */}
+      {nonImageAttachments.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {nonImageAttachments.map((a) => {
             const path = String(a.storage_path).trim();
             const url = path ? signedUrls[path] : null;
             const unavailable = path && failedPaths.has(path);
@@ -189,6 +248,32 @@ export function TicketMessage({
           __html: getMessageDisplayHtml(message.html_content, message.content),
         }}
       />
+      {/* Lightbox for inline image click */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-4"
+          onClick={closeLightbox}
+          onKeyDown={(e) => e.key === 'Escape' && closeLightbox()}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Forhåndsvis bilde"
+        >
+          <button
+            type="button"
+            onClick={closeLightbox}
+            className="absolute top-4 right-4 p-2 rounded-full bg-white/10 text-white hover:bg-white/20 focus:outline-none focus:ring-2 focus:ring-white"
+            aria-label="Lukk"
+          >
+            <X className="w-6 h-6" />
+          </button>
+          <img
+            src={lightboxUrl}
+            alt="Forhåndsvisning"
+            className="max-w-full max-h-[90vh] w-auto h-auto object-contain rounded shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 }

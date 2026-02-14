@@ -10,6 +10,7 @@ import { StatusBadge } from './StatusBadge';
 import { TicketMessage } from './TicketMessage';
 import { ReplyBox } from './ReplyBox';
 import { ForwardBox } from './ForwardBox';
+import { Select } from '../ui/Select';
 import {
   User,
   MessageSquare,
@@ -399,15 +400,13 @@ export function TicketDetail() {
                     <label className="text-[10px] font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Status</label>
                     <div className="flex items-center gap-1 mt-0.5 flex-wrap">
                       <StatusBadge status={selectedTicket.status} />
-                      <select
+                      <Select
                         value={selectedTicket.status}
-                        onChange={(e) => updateTicket(selectedTicket.id, { status: e.target.value })}
-                        className="rounded border border-[var(--hiver-border)] text-[11px] px-1.5 py-0.5 bg-white max-w-[100px]"
-                      >
-                        {statuses.map((s) => (
-                          <option key={s.id} value={s.code}>{s.label}</option>
-                        ))}
-                      </select>
+                        onChange={(v) => updateTicket(selectedTicket.id, { status: v })}
+                        options={statuses.map((s) => ({ value: s.code, label: s.label }))}
+                        size="sm"
+                        className="max-w-[100px]"
+                      />
                     </div>
                   </div>
                   <div>
@@ -421,31 +420,27 @@ export function TicketDetail() {
                           {selectedTicket.category}
                         </span>
                       ) : null}
-                      <select
+                      <Select
                         value={selectedTicket.category ?? ''}
-                        onChange={(e) => updateTicket(selectedTicket.id, { category: e.target.value || null })}
-                        className="rounded border border-[var(--hiver-border)] text-[11px] px-1.5 py-0.5 bg-white max-w-[100px]"
-                      >
-                        <option value="">—</option>
-                        {categories.map((c) => (
-                          <option key={c.id} value={c.name}>{c.name}</option>
-                        ))}
-                      </select>
+                        onChange={(v) => updateTicket(selectedTicket.id, { category: v || null })}
+                        options={categories.map((c) => ({ value: c.name, label: c.name }))}
+                        placeholder="—"
+                        size="sm"
+                        className="max-w-[100px]"
+                      />
                     </div>
                   </div>
                   <div>
                     <label className="text-[10px] font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Eierteam</label>
                     <div className="flex items-center gap-1 mt-0.5 flex-wrap">
-                      <select
+                      <Select
                         value={selectedTicket.team_id ?? ''}
-                        onChange={(e) => updateTicket(selectedTicket.id, { team_id: e.target.value || null })}
-                        className="rounded border border-[var(--hiver-border)] text-[11px] px-1.5 py-0.5 bg-white max-w-[120px]"
-                      >
-                        <option value="">—</option>
-                        {teams.map((t) => (
-                          <option key={t.id} value={t.id}>{t.name}</option>
-                        ))}
-                      </select>
+                        onChange={(v) => updateTicket(selectedTicket.id, { team_id: v || null })}
+                        options={teams.map((t) => ({ value: t.id, label: t.name }))}
+                        placeholder="—"
+                        size="sm"
+                        className="max-w-[120px]"
+                      />
                     </div>
                   </div>
                   <div>

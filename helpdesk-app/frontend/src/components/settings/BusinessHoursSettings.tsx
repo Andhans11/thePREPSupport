@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Plus, Clock, Loader2, Pencil, Trash2 } from 'lucide-react';
 import { supabase } from '../../services/supabase';
+import { Select } from '../ui/Select';
 
 const DAYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'] as const;
 const DAY_LABELS: Record<string, string> = {
@@ -186,17 +187,13 @@ export function BusinessHoursSettings() {
           </div>
           <div>
             <label className="block text-sm font-medium text-[var(--hiver-text)] mb-1">Tidssone</label>
-            <select
+            <Select
               value={TIMEZONE_OPTIONS.some((o) => o.value === formTimezone) ? formTimezone : 'UTC'}
-              onChange={(e) => setFormTimezone(e.target.value)}
-              className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm bg-[var(--hiver-panel-bg)] text-[var(--hiver-text)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
-            >
-              {TIMEZONE_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
+              onChange={setFormTimezone}
+              options={TIMEZONE_OPTIONS}
+              size="lg"
+              className="w-full"
+            />
           </div>
           <div>
             <label className="block text-sm font-medium text-[var(--hiver-text)] mb-2">Timeplan</label>

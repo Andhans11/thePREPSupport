@@ -50,11 +50,16 @@ npx vercel                # first time: link to repo / create project; Root = . 
 npx vercel --prod         # deploy to production
 ```
 
-### Still getting 404?
+### 404 + “Ready Stale” + build finishes in ~100ms?
 
-1. **Root Directory:** In Vercel → Project **Settings** → **General** → **Root Directory** must be `helpdesk-app/frontend` (for repo `thePREPSupport`). If it’s empty or wrong, set it, save, and redeploy.
-2. **Build & Output:** In **Settings** → **Build & Development** set **Output Directory** to `dist` and **Build Command** to `npm run build`.
-3. Redeploy after changing settings (Deployments → … on latest → Redeploy).
+If the build logs show **“Build Completed in /vercel/output [100ms]”** and **“no files were prepared”**, Vercel is not building your app (it’s using the repo root, so nothing runs). Fix it in the dashboard:
+
+1. Open the project on [vercel.com](https://vercel.com) → **Settings** → **General**.
+2. **Root Directory:** Click **Edit**, set to **`helpdesk-app/frontend`** (no leading slash), then **Save**.
+3. **Settings** → **Build & Development**: set **Build Command** to `npm run build` and **Output Directory** to `dist`. Save.
+4. Go to **Deployments** → open the **⋯** menu on the latest → **Redeploy** (use “Redeploy with existing Build Cache” or without, both are fine).
+
+After the redeploy, the build should take several seconds and the logs should show `npm install` and `vite build`. The new deployment will be **Current** (not Stale) and the site should load instead of 404.
 
 ### After deploy
 

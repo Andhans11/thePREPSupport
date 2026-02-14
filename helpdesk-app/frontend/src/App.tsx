@@ -8,6 +8,9 @@ import { Layout } from './components/layout/Layout';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
 import { SignupPage } from './pages/SignupPage';
+import { LandingPage } from './pages/LandingPage';
+import { ForgotPasswordPage } from './pages/ForgotPasswordPage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { OAuthCallbackPage } from './pages/OAuthCallbackPage';
 import { TicketsPage } from './pages/TicketsPage';
@@ -17,19 +20,19 @@ import { AnalyticsPage } from './pages/AnalyticsPage';
 import { PlanningPage } from './pages/PlanningPage';
 import { SettingsPage } from './pages/SettingsPage';
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+function HomeOrLanding() {
   const { user, loading } = useAuth();
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-100">
-        <p className="text-slate-500">Laster…</p>
+      <div className="min-h-screen flex items-center justify-center bg-[#f8fafc]">
+        <p className="text-[#64748b]">Laster…</p>
       </div>
     );
   }
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <LandingPage />;
   }
-  return <>{children}</>;
+  return <Layout />;
 }
 
 function AppRoutes() {
@@ -37,16 +40,11 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/signup" element={<SignupPage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/accept-invite" element={<AcceptInvitePage />} />
       <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
-      <Route
-        path="/"
-        element={
-          <ProtectedRoute>
-            <Layout />
-          </ProtectedRoute>
-        }
-      >
+      <Route path="/" element={<HomeOrLanding />}>
         <Route index element={<DashboardPage />} />
         <Route path="tickets" element={<TicketsPage />} />
         <Route path="customers" element={<CustomersPage />} />

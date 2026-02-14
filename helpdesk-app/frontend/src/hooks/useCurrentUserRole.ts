@@ -3,13 +3,14 @@ import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../services/supabase';
 import type { Role } from '../types/roles';
+import type { AvailabilityStatus } from '../types/availability';
 
 interface TeamMemberRow {
   id: string;
   role: Role;
   is_active: boolean;
   available_for_email?: boolean;
-  available_for_chat?: boolean;
+  availability_status?: string | null;
 }
 
 export function useCurrentUserRole(): {
@@ -18,9 +19,9 @@ export function useCurrentUserRole(): {
   loading: boolean;
   teamMemberId: string | null;
   availableForEmail: boolean;
-  availableForChat: boolean;
+  availabilityStatus: AvailabilityStatus;
   setAvailableForEmail: (v: boolean) => Promise<void>;
-  setAvailableForChat: (v: boolean) => Promise<void>;
+  setAvailabilityStatus: (s: AvailabilityStatus) => Promise<void>;
   refetch: () => Promise<void>;
 } {
   const { user } = useAuth();
@@ -30,7 +31,7 @@ export function useCurrentUserRole(): {
   const [loading, setLoading] = useState(true);
   const [teamMemberId, setTeamMemberId] = useState<string | null>(null);
   const [availableForEmail, setAvailableForEmailState] = useState(true);
-  const [availableForChat, setAvailableForChatState] = useState(true);
+  const [availabilityStatus, setAvailabilityStatusState] = useState<AvailabilityStatus>('active');
 
   const refetch = useCallback(async () => {
     if (!user?.id || !currentTenantId) {
@@ -38,7 +39,7 @@ export function useCurrentUserRole(): {
       setIsActive(true);
       setTeamMemberId(null);
       setAvailableForEmailState(true);
-      setAvailableForChatState(true);
+      setAvailabilityStatusState('active');
       setLoading(false);
       return;
     }
@@ -46,14 +47,14 @@ export function useCurrentUserRole(): {
     let row: TeamMemberRow | null = null;
     const { data: fullData, error: fullError } = await supabase
       .from('team_members')
-      .select('id, role, is_active, available_for_email, available_for_chat')
+      .select('id, role, is_active, available_for_email, availability_status')
       .eq('user_id', user.id)
       .eq('tenant_id', currentTenantId)
       .maybeSingle();
     if (fullError) {
       const { data: minimalData } = await supabase
         .from('team_members')
-        .select('id, role, is_active')
+        .select('id, role, is_active, available_for_email')
         .eq('user_id', user.id)
         .eq('tenant_id', currentTenantId)
         .maybeSingle();
@@ -65,7 +66,10 @@ export function useCurrentUserRole(): {
     setIsActive(row?.is_active ?? true);
     setTeamMemberId(row?.id ?? null);
     setAvailableForEmailState(row?.available_for_email ?? true);
-    setAvailableForChatState(row?.available_for_chat ?? true);
+    const status = row?.availability_status as AvailabilityStatus | undefined;
+    setAvailabilityStatusState(
+      status && ['active', 'away', 'busy', 'offline'].includes(status) ? status : 'active'
+    );
     setLoading(false);
   }, [user?.id, currentTenantId]);
 
@@ -76,17 +80,23 @@ export function useCurrentUserRole(): {
   const setAvailableForEmail = useCallback(
     async (v: boolean) => {
       if (!teamMemberId) return;
-      await supabase.from('team_members').update({ available_for_email: v }).eq('id', teamMemberId);
+      const status: AvailabilityStatus = v ? 'active' : 'away';
+      await supabase
+        .from('team_members')
+        .update({ available_for_email: v, availability_status: status })
+        .eq('id', teamMemberId);
       setAvailableForEmailState(v);
+      setAvailabilityStatusState(status);
     },
     [teamMemberId]
   );
 
-  const setAvailableForChat = useCallback(
-    async (v: boolean) => {
+  const setAvailabilityStatus = useCallback(
+    async (s: AvailabilityStatus) => {
       if (!teamMemberId) return;
-      await supabase.from('team_members').update({ available_for_chat: v }).eq('id', teamMemberId);
-      setAvailableForChatState(v);
+      await supabase.from('team_members').update({ availability_status: s }).eq('id', teamMemberId);
+      setAvailabilityStatusState(s);
+      setAvailableForEmailState(s === 'active');
     },
     [teamMemberId]
   );
@@ -97,9 +107,9 @@ export function useCurrentUserRole(): {
     loading,
     teamMemberId,
     availableForEmail,
-    availableForChat,
+    availabilityStatus,
     setAvailableForEmail,
-    setAvailableForChat,
+    setAvailabilityStatus,
     refetch,
   };
 }

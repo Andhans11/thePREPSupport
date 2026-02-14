@@ -50,6 +50,12 @@ npx vercel                # first time: link to repo / create project; Root = . 
 npx vercel --prod         # deploy to production
 ```
 
+### Still getting 404?
+
+1. **Root Directory:** In Vercel → Project **Settings** → **General** → **Root Directory** must be `helpdesk-app/frontend` (for repo `thePREPSupport`). If it’s empty or wrong, set it, save, and redeploy.
+2. **Build & Output:** In **Settings** → **Build & Development** set **Output Directory** to `dist` and **Build Command** to `npm run build`.
+3. Redeploy after changing settings (Deployments → … on latest → Redeploy).
+
 ### After deploy
 
 - In **Google Cloud Console** (OAuth): add the production redirect URI, e.g.  

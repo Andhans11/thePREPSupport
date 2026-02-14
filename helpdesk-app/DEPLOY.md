@@ -9,7 +9,17 @@ The app has two parts:
 
 ## 1. Deploy frontend to Vercel
 
-### Option A: Vercel Dashboard (recommended)
+### One-command deploy (build + push → Vercel)
+
+From the **repo root** (thePREPSupport):
+
+```bash
+npm run deploy
+```
+
+This builds the frontend, commits any uncommitted changes, and pushes to GitHub. If the repo is connected to Vercel, Vercel will deploy automatically from the new push.
+
+### Option A: Vercel Dashboard (recommended for first-time setup)
 
 1. **Push your code to GitHub** (if you haven’t already).
 2. Go to [vercel.com](https://vercel.com) → **Add New** → **Project**.
@@ -33,10 +43,11 @@ The app has two parts:
 
 ```bash
 cd helpdesk-app/frontend
-npm i -g vercel
-vercel
-# Follow prompts; set Root to . when asked
-# Add env vars: vercel env add VITE_SUPABASE_URL (etc.)
+npx vercel login          # log in once (opens browser)
+npx vercel                # first time: link to repo / create project; Root = . (current dir)
+# Add env vars in Dashboard (Project → Settings → Environment Variables)
+# or: npx vercel env add VITE_SUPABASE_URL
+npx vercel --prod         # deploy to production
 ```
 
 ### After deploy

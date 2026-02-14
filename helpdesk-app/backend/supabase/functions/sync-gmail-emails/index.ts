@@ -50,7 +50,28 @@ function getPartFilename(part: { filename?: string; headers?: { name: string; va
   const disp = part.headers?.find((h) => h.name.toLowerCase() === 'content-disposition')?.value ?? '';
   const m = /filename\s*=\s*["']?([^"'\s;]+)/i.exec(disp);
   if (m) return m[1].trim();
+  const ct = part.headers?.find((h) => h.name.toLowerCase() === 'content-type')?.value ?? '';
+  const nameMatch = /name\s*=\s*["']?([^"'\s;]+)/i.exec(ct);
+  if (nameMatch) return nameMatch[1].trim();
   return null;
+}
+
+/** Flatten MIME part tree so inline images inside multipart/related (or nested) are included. */
+function flattenParts(
+  payload: { parts?: unknown[]; body?: { data?: string; attachmentId?: string } } | null,
+  acc: unknown[] = []
+): unknown[] {
+  if (!payload) return acc;
+  const parts = payload.parts ?? (payload.body ? [payload] : []);
+  for (const part of parts) {
+    const p = part as { parts?: unknown[]; body?: { data?: string; attachmentId?: string }; mimeType?: string };
+    if (p.parts && Array.isArray(p.parts) && p.parts.length > 0) {
+      flattenParts({ parts: p.parts }, acc);
+    } else {
+      acc.push(part);
+    }
+  }
+  return acc;
 }
 
 type AttachmentPart = { filename: string; mimeType: string; attachmentId?: string; inlineData?: string };
@@ -212,21 +233,22 @@ async function runSyncForGmailRow(
     const fromName = from.replace(/<[^>]+>/, '').trim() || null;
 
     let body = '';
-    const parts = full.payload?.parts ?? (full.payload?.body ? [full.payload] : []);
+    const flatParts = flattenParts(full.payload);
     const attachmentParts: AttachmentPart[] = [];
-    for (const part of parts) {
-      if (part.mimeType === 'text/plain' && part.body?.data) {
-        body = decodeBase64Url(part.body.data);
+    for (const part of flatParts) {
+      const p = part as { mimeType?: string; body?: { data?: string; attachmentId?: string }; filename?: string; headers?: { name: string; value: string }[] };
+      if (p.mimeType === 'text/plain' && p.body?.data) {
+        body = decodeBase64Url(p.body.data);
       }
-      const filename = getPartFilename(part) || `attachment_${attachmentParts.length + 1}`;
-      const hasData = part.body?.attachmentId || part.body?.data;
-      const isBodyPart = part.mimeType === 'text/plain' || part.mimeType === 'text/html';
+      const filename = getPartFilename(p) || `attachment_${attachmentParts.length + 1}`;
+      const hasData = p.body?.attachmentId || p.body?.data;
+      const isBodyPart = p.mimeType === 'text/plain' || p.mimeType === 'text/html';
       if (hasData && !isBodyPart) {
         attachmentParts.push({
           filename,
-          mimeType: part.mimeType || 'application/octet-stream',
-          attachmentId: part.body?.attachmentId,
-          inlineData: part.body?.data ? (part.body.data as string) : undefined,
+          mimeType: p.mimeType || 'application/octet-stream',
+          attachmentId: p.body?.attachmentId,
+          inlineData: p.body?.data ? (p.body.data as string) : undefined,
         });
       }
     }

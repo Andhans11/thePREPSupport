@@ -7,7 +7,7 @@ import { isAdmin } from '../../types/roles';
 import { formatListTime } from '../../utils/formatters';
 import type { Ticket } from '../../types/ticket';
 import { StatusBadge } from './StatusBadge';
-import { Search, Plus, Archive, Trash2 } from 'lucide-react';
+import { Search, Plus, Archive, Trash2, UserPlus } from 'lucide-react';
 
 const ARCHIVED_STATUS = 'archived';
 
@@ -18,6 +18,7 @@ function TicketRow({
   onSelect,
   onArchive,
   onDelete,
+  onAssignToMe,
 }: {
   ticket: Ticket;
   categories: { id: string; name: string; color_hex?: string | null }[];
@@ -25,15 +26,31 @@ function TicketRow({
   onSelect: () => void;
   onArchive?: () => void;
   onDelete?: () => void;
+  onAssignToMe?: () => void;
 }) {
   const senderName = ticket.customer?.name || ticket.customer?.email || 'Ukjent';
   const senderEmail = ticket.customer?.email ?? null;
   const isNew = ticket.status === 'open';
   const cat = ticket.category ? categories.find((c) => c.name === ticket.category) : null;
   const catColor = cat?.color_hex ?? '#6b7280';
+  const isUnassigned = !ticket.assigned_to;
 
   return (
     <li className="flex">
+      {onAssignToMe && isUnassigned && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onAssignToMe();
+          }}
+          className="shrink-0 p-2 flex items-center justify-center text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-accent)] transition-colors self-center"
+          title="Tildel til meg"
+          aria-label="Tildel til meg"
+        >
+          <UserPlus className="w-4 h-4" />
+        </button>
+      )}
       <button
         type="button"
         onClick={onSelect}
@@ -243,6 +260,11 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket }:
                           deleteTicket(ticket.id);
                         }
                       }
+                    : undefined
+                }
+                onAssignToMe={
+                  user && !ticket.assigned_to
+                    ? () => updateTicket(ticket.id, { assigned_to: user.id, status: 'pending' })
                     : undefined
                 }
               />

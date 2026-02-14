@@ -46,6 +46,7 @@ export function TicketMessage({
   const [signedUrls, setSignedUrls] = useState<Record<string, string>>({});
   const [failedPaths, setFailedPaths] = useState<Set<string>>(new Set());
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
   const attachments = Array.isArray(message.attachments) ? message.attachments.filter(isMessageAttachment) : [];
   const imageAttachments = attachments.filter(isImageAttachment);
   const nonImageAttachments = attachments.filter((a) => !isImageAttachment(a));
@@ -61,26 +62,29 @@ export function TicketMessage({
       document.body.style.overflow = '';
     };
   }, [lightboxUrl, closeLightbox]);
-  useEffect(() => {
+
+  const attachmentPaths = attachments.map((a) => a.storage_path);
+  const loadSignedUrls = useCallback(async () => {
     if (attachments.length === 0) return;
-    const load = async () => {
-      const next: Record<string, string> = {};
-      const failed = new Set<string>();
-      for (const a of attachments) {
-        const path = String(a.storage_path).trim();
-        if (!path) continue;
-        const { data, error } = await supabase.storage.from('ticket-attachments').createSignedUrl(path, 3600);
-        if (error) {
-          failed.add(path);
-          continue;
-        }
-        if (data?.signedUrl) next[path] = data.signedUrl;
+    const next: Record<string, string> = {};
+    const failed = new Set<string>();
+    for (const a of attachments) {
+      const path = String(a.storage_path).trim();
+      if (!path) continue;
+      const { data, error } = await supabase.storage.from('ticket-attachments').createSignedUrl(path, 3600);
+      if (error) {
+        failed.add(path);
+        continue;
       }
-      setSignedUrls((prev) => ({ ...prev, ...next }));
-      if (failed.size > 0) setFailedPaths((prev) => new Set([...prev, ...failed]));
-    };
-    load();
-  }, [message.id, JSON.stringify(attachments.map((a) => a.storage_path))]);
+      if (data?.signedUrl) next[path] = data.signedUrl;
+    }
+    setSignedUrls((prev) => ({ ...prev, ...next }));
+    setFailedPaths((prev) => new Set([...prev, ...failed]));
+  }, [message.id, JSON.stringify(attachmentPaths)]);
+
+  useEffect(() => {
+    loadSignedUrls();
+  }, [loadSignedUrls, retryCount]);
   const isCustomer = message.is_customer;
   const isInternal = message.is_internal_note;
   const showActions = !isInternal && (onReply || onReplyAll || onForward);
@@ -191,15 +195,17 @@ export function TicketMessage({
               );
             }
             return (
-              <span
+              <button
                 key={path || a.filename}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500"
-                title={unavailable ? 'Filen finnes ikke eller du har ikke tilgang' : 'Laster…'}
+                type="button"
+                onClick={() => unavailable && setRetryCount((c) => c + 1)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500 hover:bg-slate-100 hover:border-slate-300 transition-colors text-left"
+                title={unavailable ? 'Bilde ikke tilgjengelig. Klikk for å prøve på nytt.' : 'Laster…'}
               >
                 <span className="truncate max-w-[180px]">{a.filename}</span>
                 {a.size != null && <span className="text-xs text-slate-400">({(a.size / 1024).toFixed(1)} KB)</span>}
-                {unavailable && <span className="text-xs">(ikke tilgjengelig)</span>}
-              </span>
+                {unavailable && <span className="text-xs">(ikke tilgjengelig – klikk for å prøve på nytt)</span>}
+              </button>
             );
           })}
         </div>
@@ -228,16 +234,19 @@ export function TicketMessage({
               );
             }
             return (
-              <span
+              <button
                 key={path || a.filename}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500"
-                title={unavailable ? 'Filen finnes ikke eller du har ikke tilgang' : undefined}
+                type="button"
+                onClick={() => unavailable && setRetryCount((c) => c + 1)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 text-sm text-slate-500 hover:bg-slate-100 hover:border-slate-300 transition-colors text-left disabled:opacity-100 disabled:cursor-default"
+                title={unavailable ? 'Vedlegg ikke tilgjengelig. Klikk for å prøve på nytt.' : undefined}
+                disabled={!unavailable}
               >
                 <Paperclip className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate max-w-[180px]">{a.filename}</span>
                 {a.size != null && <span className="text-xs text-slate-400">({(a.size / 1024).toFixed(1)} KB)</span>}
-                {unavailable && <span className="text-xs">(ikke tilgjengelig)</span>}
-              </span>
+                {unavailable && <span className="text-xs">(ikke tilgjengelig – klikk for å prøve på nytt)</span>}
+              </button>
             );
           })}
         </div>

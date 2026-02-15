@@ -29,6 +29,20 @@ function isMessageAttachment(a: unknown): a is MessageAttachment {
   return typeof a === 'object' && a !== null && 'storage_path' in a && 'filename' in a;
 }
 
+/** Normalize attachments from API: may be array, JSON string, or null/undefined. */
+function normalizeAttachments(raw: unknown): MessageAttachment[] {
+  if (Array.isArray(raw)) return raw.filter(isMessageAttachment);
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return Array.isArray(parsed) ? parsed.filter(isMessageAttachment) : [];
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
 function isImageAttachment(a: MessageAttachment): boolean {
   const mime = (a.mime_type || '').toLowerCase();
   if (mime.startsWith('image/')) return true;
@@ -92,7 +106,7 @@ export function TicketMessage({
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const blobUrlsRef = useRef<Set<string>>(new Set());
-  const attachments = Array.isArray(message.attachments) ? message.attachments.filter(isMessageAttachment) : [];
+  const attachments = normalizeAttachments(message.attachments);
   const imageAttachments = attachments.filter(isImageAttachment);
   const nonImageAttachments = attachments.filter((a) => !isImageAttachment(a));
   const normalizePath = normalizeStoragePath;
@@ -125,26 +139,10 @@ export function TicketMessage({
     const paths = attachmentPaths.filter(Boolean);
     if (paths.length === 0) return;
 
-    const urlMap: Record<string, string> = {};
-    const failed: string[] = [];
-
-    // Primary: client download (RLS allows read for team members)
-    for (const path of paths) {
-      const { data, error } = await supabase.storage.from('ticket-attachments').download(path);
-      if (!error && data) {
-        const blobUrl = URL.createObjectURL(data);
-        blobUrlsRef.current.add(blobUrl);
-        urlMap[path] = blobUrl;
-      } else {
-        failed.push(path);
-      }
-    }
-
-    // Fallback: Edge Function signed URLs for any path that download failed
-    if (failed.length > 0) {
-      const { urls } = await signTicketAttachmentUrls(failed);
-      Object.assign(urlMap, urls);
-    }
+    // Use signed URLs only (avoids 400s from direct storage object GET on private bucket)
+    await supabase.auth.refreshSession();
+    const { urls } = await signTicketAttachmentUrls(paths);
+    const urlMap: Record<string, string> = { ...urls };
 
     const stillFailed = new Set(paths.filter((p) => !urlMap[p]));
     setSignedUrls((prev) => {
@@ -309,7 +307,7 @@ export function TicketMessage({
           })}
         </div>
       )}
-      {/* Non-image attachments: download links */}
+      {/* Non-image attachments: open in new tab (e.g. PDF in browser viewer) */}
       {nonImageAttachments.length > 0 && (
         <div className="flex flex-wrap gap-2 mb-2">
           {nonImageAttachments.map((a) => {
@@ -321,10 +319,10 @@ export function TicketMessage({
                 <a
                   key={path}
                   href={url}
-                  download={a.filename}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-sm text-slate-700 hover:bg-slate-50"
+                  title={`Åpne ${a.filename}`}
                 >
                   <Paperclip className="w-3.5 h-3.5 text-slate-500 shrink-0" />
                   <span className="truncate max-w-[180px]">{a.filename}</span>

@@ -173,7 +173,9 @@ async function fetchAndUploadAttachments(
       contentType: part.mimeType || 'application/octet-stream',
       upsert: true,
     });
-    if (!error) {
+    if (error) {
+      console.error('[sync-gmail-emails] Upload failed', storagePath, error.message);
+    } else {
       uploaded.push({ storage_path: storagePath, filename: part.filename, mime_type: part.mimeType || 'application/octet-stream', size: bytes.length });
       if (part.contentId) {
         const normalized = part.contentId.replace(/^<|>$/g, '').trim();

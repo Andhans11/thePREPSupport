@@ -29,10 +29,10 @@ serve(async (req) => {
 
   const authHeader = req.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ error: 'Unauthorized', message: 'Missing or invalid Authorization header' }),
+      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 
   const token = authHeader.slice(7);
@@ -42,12 +42,15 @@ serve(async (req) => {
     { global: { headers: { Authorization: `Bearer ${token}` } } }
   );
 
-  const { data: { user } } = await userClient.auth.getUser(token);
+  const { data: { user }, error: userError } = await userClient.auth.getUser(token);
   if (!user) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    const message = userError?.message?.toLowerCase().includes('jwt')
+      ? 'Session expired or invalid. Please log in again.'
+      : 'Unauthorized';
+    return new Response(
+      JSON.stringify({ error: 'Unauthorized', message }),
+      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 
   let body: { paths?: string[] } = {};

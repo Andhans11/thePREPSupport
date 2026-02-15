@@ -153,12 +153,16 @@ export async function sendInvitationEmail(
   return { sent: json.sent === true, error: json.error ?? json.message };
 }
 
-/** Get signed URLs for ticket attachment paths. Uses refreshed session and explicit fetch so the Edge Function receives the user JWT. */
+/** Get signed URLs for ticket attachment paths. Uses current or refreshed session so the Edge Function receives a valid JWT. */
 export async function signTicketAttachmentUrls(paths: string[]): Promise<{ urls: Record<string, string>; error?: string }> {
-  const { data, error: refreshError } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (refreshError || !token) {
-    return { urls: {}, error: 'Ikke innlogget' };
+  const { data: sessionData } = await supabase.auth.getSession();
+  let token = sessionData.session?.access_token;
+  if (!token) {
+    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+    token = refreshData.session?.access_token;
+    if (refreshError || !token) {
+      return { urls: {}, error: 'Ikke innlogget' };
+    }
   }
   const url = `${getSupabaseUrl()}/functions/v1/sign-ticket-attachment-urls`;
   const res = await fetch(url, {
@@ -172,7 +176,10 @@ export async function signTicketAttachmentUrls(paths: string[]): Promise<{ urls:
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    return { urls: {}, error: json.error || json.message || res.statusText };
+    const message = res.status === 401
+      ? (json.message || json.error || 'Sesjon utløpt. Logg inn på nytt.')
+      : (json.error || json.message || res.statusText);
+    return { urls: {}, error: message };
   }
   return { urls: (json.urls ?? {}) as Record<string, string> };
 }

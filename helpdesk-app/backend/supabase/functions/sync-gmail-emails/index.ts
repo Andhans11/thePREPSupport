@@ -93,6 +93,45 @@ function flattenParts(
   return acc;
 }
 
+function compileTicketReceivedTemplate(
+  content: string,
+  ctx: { ticket_number: string; customer_name: string; customer_email: string; ticket_subject: string }
+): string {
+  return content
+    .replace(/\{\{ticket_number\}\}/g, ctx.ticket_number)
+    .replace(/\{\{customer\.name\}\}/g, ctx.customer_name)
+    .replace(/\{\{customer\.email\}\}/g, ctx.customer_email)
+    .replace(/\{\{ticket\.subject\}\}/g, ctx.ticket_subject);
+}
+
+async function sendTicketReceivedReply(
+  accessToken: string,
+  threadId: string,
+  toEmail: string,
+  subjectLine: string,
+  bodyPlain: string,
+  fromAddress: string,
+  fromDisplay: string
+): Promise<boolean> {
+  const fromHeader = `From: ${fromDisplay} <${fromAddress}>`;
+  const plainNormalized = bodyPlain.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
+  const raw = [
+    fromHeader,
+    `To: ${toEmail}`,
+    `Subject: ${subjectLine.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim()}`,
+    'Content-Type: text/plain; charset=utf-8',
+    '',
+    plainNormalized,
+  ].join('\r\n');
+  const encoded = encodeBase64Url(raw);
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw: encoded, threadId }),
+  });
+  return res.ok;
+}
+
 type AttachmentPart = { filename: string; mimeType: string; attachmentId?: string; inlineData?: string; contentId?: string | null };
 
 type UploadedAttachment = { storage_path: string; filename: string; mime_type: string; size: number };
@@ -162,45 +201,6 @@ function encodeBase64Url(str: string): string {
 }
 
 /** Replace placeholders in ticket-received template. Supports {{ticket_number}}, {{customer.name}}, {{customer.email}}, {{ticket.subject}}. */
-function compileTicketReceivedTemplate(
-  content: string,
-  ctx: { ticket_number: string; customer_name: string; customer_email: string; ticket_subject: string }
-): string {
-  return content
-    .replace(/\{\{ticket_number\}\}/g, ctx.ticket_number)
-    .replace(/\{\{customer\.name\}\}/g, ctx.customer_name)
-    .replace(/\{\{customer\.email\}\}/g, ctx.customer_email)
-    .replace(/\{\{ticket\.subject\}\}/g, ctx.ticket_subject);
-}
-
-async function sendTicketReceivedReply(
-  accessToken: string,
-  threadId: string,
-  toEmail: string,
-  subjectLine: string,
-  bodyPlain: string,
-  fromAddress: string,
-  fromDisplay: string
-): Promise<boolean> {
-  const fromHeader = `From: ${fromDisplay} <${fromAddress}>`;
-  const plainNormalized = bodyPlain.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
-  const raw = [
-    fromHeader,
-    `To: ${toEmail}`,
-    `Subject: ${subjectLine.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim()}`,
-    'Content-Type: text/plain; charset=utf-8',
-    '',
-    plainNormalized,
-  ].join('\r\n');
-  const encoded = encodeBase64Url(raw);
-  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ raw: encoded, threadId }),
-  });
-  return res.ok;
-}
-
 async function runSyncForGmailRow(
   serviceSupabase: ReturnType<typeof createClient>,
   gmailRow: GmailSyncRow
@@ -216,21 +216,21 @@ async function runSyncForGmailRow(
   }
   const accessToken = await getAccessToken(gmailRow.refresh_token, oauthRow.client_id.trim(), oauthRow.client_secret.trim());
 
-  const { data: ticketReceivedSettings } = await serviceSupabase
+  const { data: emailSettings } = await serviceSupabase
     .from('company_settings')
     .select('key, value')
     .eq('tenant_id', tenantIdForData)
-    .in('key', ['ticket_received_subject', 'ticket_received_content']);
-  const settingsMap = (ticketReceivedSettings ?? []).reduce(
-    (acc: Record<string, string>, r: { key: string; value: unknown }) => {
-      const v = r.value != null ? (typeof r.value === 'string' ? r.value : String(r.value)) : '';
-      acc[r.key] = v;
+    .in('key', ['ticket_received_subject', 'ticket_received_content', 'email_sender_on_new_ticket']);
+  const settingsMap = (emailSettings ?? []).reduce(
+    (acc: Record<string, unknown>, r: { key: string; value: unknown }) => {
+      acc[r.key] = r.value;
       return acc;
     },
     {}
   );
-  const ticketReceivedSubject = (settingsMap['ticket_received_subject'] ?? '').trim();
-  const ticketReceivedContent = (settingsMap['ticket_received_content'] ?? '').trim();
+  const emailSenderOnNewTicket = settingsMap['email_sender_on_new_ticket'] === true || settingsMap['email_sender_on_new_ticket'] === 'true';
+  const ticketReceivedSubject = (typeof settingsMap['ticket_received_subject'] === 'string' ? settingsMap['ticket_received_subject'] : '') as string;
+  const ticketReceivedContent = (typeof settingsMap['ticket_received_content'] === 'string' ? settingsMap['ticket_received_content'] : '') as string;
   const defaultTicketReceivedBody =
     'We have received your request. Your ticket number is {{ticket_number}}. We will get back to you as soon as possible.';
   const ticketReceivedBody = ticketReceivedContent.length > 0 ? ticketReceivedContent : defaultTicketReceivedBody;
@@ -473,10 +473,10 @@ async function runSyncForGmailRow(
       }
     }
 
-    const ticketNumber = (newTicket as { ticket_number?: string | null }).ticket_number?.trim() || '';
     const fromAddress = groupEmailTrimmed ?? (gmailRow.email_address?.trim() || '');
-    const fromDisplay = groupEmailTrimmed ? 'Support' : (gmailRow.email_address?.trim() || 'Support');
-    if (fromAddress) {
+    if (emailSenderOnNewTicket && fromAddress) {
+      const ticketNumber = (newTicket as { ticket_number?: string | null }).ticket_number?.trim() || '';
+      const fromDisplay = groupEmailTrimmed ? 'Support' : (gmailRow.email_address?.trim() || 'Support');
       try {
         const replyBody = compileTicketReceivedTemplate(ticketReceivedBody, {
           ticket_number: ticketNumber,
@@ -498,23 +498,6 @@ async function runSyncForGmailRow(
       } catch (e) {
         console.error('Failed to send ticket-received reply', e);
       }
-    }
-
-    try {
-      const supabaseUrl = Deno.env.get('SUPABASE_URL')?.replace(/\/$/, '') ?? '';
-      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-      if (supabaseUrl && serviceKey) {
-        await fetch(`${supabaseUrl}/functions/v1/send-new-ticket-notification`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${serviceKey}`,
-          },
-          body: JSON.stringify({ ticket_id: newTicket.id, tenant_id: tenantIdForData }),
-        });
-      }
-    } catch (e) {
-      console.error('Failed to send new-ticket notifications', e);
     }
 
     created++;

@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useGmail } from '../../contexts/GmailContext';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
 import { useNotifications } from '../../hooks/useNotifications';
+import { formatRelative } from '../../utils/formatters';
 import { getNotificationIcon } from '../../utils/notificationIcons';
 import { isAdmin, canAccessSettings } from '../../types/roles';
 import { AVAILABILITY_LABELS, AVAILABILITY_COLORS, type AvailabilityStatus } from '../../types/availability';
@@ -18,6 +20,7 @@ import {
   Minus,
   X,
   List,
+  RefreshCw,
 } from 'lucide-react';
 
 function getInitials(email: string, fullName?: string | null): string {
@@ -55,6 +58,7 @@ export function Header() {
   const notifRef = useRef<HTMLDivElement>(null);
 
   const { role, availableForEmail, setAvailableForEmail, availabilityStatus, setAvailabilityStatus, teamMemberId } = useCurrentUserRole();
+  const { lastSyncAt, syncNow, syncing } = useGmail();
   const { items: notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications({ unreadOnly: true });
   const admin = isAdmin(role);
 
@@ -110,8 +114,20 @@ export function Header() {
   const displayName = user?.user_metadata?.full_name || user?.email;
 
   return (
-    <header className="h-14 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] flex items-center justify-end gap-2 px-4 shrink-0">
-      <div className="flex items-center gap-2">
+    <header className="h-14 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] flex items-center justify-between gap-4 px-4 shrink-0">
+      <button
+        type="button"
+        onClick={() => syncNow()}
+        disabled={syncing}
+        className="flex items-center gap-2 min-w-0 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--hiver-bg)] transition-colors disabled:opacity-70 disabled:cursor-wait"
+        title="Synkroniser e-post på nytt"
+      >
+        <RefreshCw className={`w-4 h-4 text-[var(--hiver-text-muted)] shrink-0 ${syncing ? 'animate-spin' : ''}`} aria-hidden />
+        <span className="text-xs text-[var(--hiver-text-muted)] truncate" title={lastSyncAt ? formatRelative(lastSyncAt) : undefined}>
+          {syncing ? 'Synkroniserer…' : lastSyncAt ? `Sist sync: ${formatRelative(lastSyncAt)}` : 'Ingen sync ennå'}
+        </span>
+      </button>
+      <div className="flex items-center gap-2 shrink-0">
       {/* Notifications */}
       <div className="relative" ref={notifRef}>
         <button

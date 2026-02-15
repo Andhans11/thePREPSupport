@@ -32,6 +32,7 @@ export function TemplatesSettings() {
   const [formCategory, setFormCategory] = useState('');
   const [ticketReceivedSubject, setTicketReceivedSubject] = useState('');
   const [ticketReceivedContent, setTicketReceivedContent] = useState('');
+  const [emailSenderOnNewTicket, setEmailSenderOnNewTicket] = useState(false);
   const [ticketReceivedSaving, setTicketReceivedSaving] = useState(false);
 
   const fetchTemplates = async () => {
@@ -58,12 +59,16 @@ export function TemplatesSettings() {
       .from('company_settings')
       .select('key, value')
       .eq('tenant_id', currentTenantId)
-      .in('key', ['ticket_received_subject', 'ticket_received_content']);
+      .in('key', ['ticket_received_subject', 'ticket_received_content', 'email_sender_on_new_ticket']);
     const rows = (data ?? []) as { key: string; value: unknown }[];
     rows.forEach((r) => {
-      const v = r.value != null ? (typeof r.value === 'string' ? r.value : String(r.value)) : '';
-      if (r.key === 'ticket_received_subject') setTicketReceivedSubject(v);
-      if (r.key === 'ticket_received_content') setTicketReceivedContent(v);
+      if (r.key === 'email_sender_on_new_ticket') {
+        setEmailSenderOnNewTicket(r.value === true || r.value === 'true');
+      } else {
+        const v = r.value != null ? (typeof r.value === 'string' ? r.value : String(r.value)) : '';
+        if (r.key === 'ticket_received_subject') setTicketReceivedSubject(v);
+        if (r.key === 'ticket_received_content') setTicketReceivedContent(v);
+      }
     });
   };
 
@@ -205,9 +210,37 @@ export function TemplatesSettings() {
           <MailCheck className="w-4 h-4 text-[var(--hiver-accent)]" />
           Mottaksbekreftelse (e-post ved ny sak)
         </h3>
+        <div className="flex items-center gap-3 py-2">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={emailSenderOnNewTicket}
+            onClick={async () => {
+              if (!currentTenantId) return;
+              const next = !emailSenderOnNewTicket;
+              setEmailSenderOnNewTicket(next);
+              await supabase
+                .from('company_settings')
+                .upsert(
+                  { tenant_id: currentTenantId, key: 'email_sender_on_new_ticket', value: next },
+                  { onConflict: 'tenant_id,key' }
+                );
+              toast.success(next ? 'Mottaksbekreftelse er aktivert' : 'Mottaksbekreftelse er deaktivert');
+            }}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/40 focus:ring-offset-2 ${emailSenderOnNewTicket ? 'bg-[var(--hiver-accent)]' : 'bg-[var(--hiver-border)]'}`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${emailSenderOnNewTicket ? 'translate-x-5' : 'translate-x-0.5'}`}
+              style={{ marginTop: 2 }}
+            />
+          </button>
+          <span className="text-sm text-[var(--hiver-text)]">
+            Send e-post til avsender når ny henvendelse kommer inn på e-post (f.eks. aktiver i prod)
+          </span>
+        </div>
         <p className="text-sm text-[var(--hiver-text-muted)]">
-          Denne e-posten sendes automatisk til avsender når en ny sak opprettes fra innkommende e-post.
-          La innholdet stå tomt for å slå av. Variabler:{' '}
+          Når aktivert sendes e-posten under til avsender når en ny sak opprettes fra innkommende e-post.
+          Variabler:{' '}
           <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{ticket_number}}'}</code>,{' '}
           <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{customer.name}}'}</code>,{' '}
           <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{customer.email}}'}</code>,{' '}

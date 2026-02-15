@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Message, MessageAttachment } from '../../types/message';
 import { formatDateTime } from '../../utils/formatters';
 import { getMessageDisplayHtml } from '../../utils/sanitizeHtml';
 import { signTicketAttachmentUrls } from '../../services/api';
+import { supabase } from '../../services/supabase';
 import { Reply, ReplyAll, Forward, Paperclip, X } from 'lucide-react';
 
 interface TicketMessageProps {
@@ -90,6 +91,7 @@ export function TicketMessage({
   const [failedPaths, setFailedPaths] = useState<Set<string>>(new Set());
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const blobUrlsRef = useRef<Set<string>>(new Set());
   const attachments = Array.isArray(message.attachments) ? message.attachments.filter(isMessageAttachment) : [];
   const imageAttachments = attachments.filter(isImageAttachment);
   const nonImageAttachments = attachments.filter((a) => !isImageAttachment(a));
@@ -107,19 +109,62 @@ export function TicketMessage({
     };
   }, [lightboxUrl, closeLightbox]);
 
+  // Revoke blob URLs on unmount to avoid leaks
+  useEffect(() => {
+    return () => {
+      blobUrlsRef.current.forEach((url) => {
+        try { URL.revokeObjectURL(url); } catch { /* ignore */ }
+      });
+      blobUrlsRef.current.clear();
+    };
+  }, []);
+
   const attachmentPaths = attachments.map((a) => normalizeStoragePath(a.storage_path));
   const loadAttachmentUrls = useCallback(async () => {
     if (attachments.length === 0) return;
     const paths = attachmentPaths.filter(Boolean);
     if (paths.length === 0) return;
-    const { urls } = await signTicketAttachmentUrls(paths);
-    const failed = new Set(paths.filter((p) => !urls[p]));
-    setSignedUrls((prev) => ({ ...prev, ...urls }));
+
+    const urlMap: Record<string, string> = {};
+    const failed: string[] = [];
+
+    // Primary: client download (RLS allows read for team members)
+    for (const path of paths) {
+      const { data, error } = await supabase.storage.from('ticket-attachments').download(path);
+      if (!error && data) {
+        const blobUrl = URL.createObjectURL(data);
+        blobUrlsRef.current.add(blobUrl);
+        urlMap[path] = blobUrl;
+      } else {
+        failed.push(path);
+      }
+    }
+
+    // Fallback: Edge Function signed URLs for any path that download failed
+    if (failed.length > 0) {
+      const { urls } = await signTicketAttachmentUrls(failed);
+      Object.assign(urlMap, urls);
+    }
+
+    const stillFailed = new Set(paths.filter((p) => !urlMap[p]));
+    setSignedUrls((prev) => {
+      const next = { ...prev };
+      paths.forEach((p) => {
+        const old = next[p];
+        if (old?.startsWith('blob:')) {
+          blobUrlsRef.current.delete(old);
+          try { URL.revokeObjectURL(old); } catch { /* ignore */ }
+        }
+        if (urlMap[p]) next[p] = urlMap[p];
+        else delete next[p];
+      });
+      return next;
+    });
     setFailedPaths((prev) => {
-      const nextSet = new Set(prev);
-      attachmentPaths.forEach((p) => nextSet.delete(p));
-      failed.forEach((p) => nextSet.add(p));
-      return nextSet;
+      const next = new Set(prev);
+      attachmentPaths.forEach((p) => next.delete(p));
+      stillFailed.forEach((p) => next.add(p));
+      return next;
     });
   }, [message.id, JSON.stringify(attachmentPaths)]);
 

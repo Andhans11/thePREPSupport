@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
-import { getGmailAuthUrl, isGmailOAuthConfigured } from '../services/gmail';
+import { getGmailAuthUrl } from '../services/gmail';
 import { exchangeOAuthCodeForTokens, triggerGmailSync, disconnectGmail } from '../services/api';
 import { useTenant } from './TenantContext';
 import { useToast } from './ToastContext';
@@ -25,13 +25,14 @@ interface GmailContextValue {
   syncing: boolean;
   savingGroupEmail: boolean;
   error: string | null;
-  connectGmail: () => void;
+  connectGmail: (teamEmail?: string | null, accountType?: 'user' | 'group') => void;
   isGmailOAuthConfigured: boolean;
-  handleOAuthCallback: (code: string) => Promise<boolean>;
+  handleOAuthCallback: (code: string, tenantIdFromState?: string | null, groupEmail?: string | null) => Promise<{ ok: boolean; error?: string }>;
   syncNow: () => Promise<{ success: boolean; created?: number }>;
   disconnect: () => Promise<void>;
   updateGroupEmail: (email: string | null) => Promise<void>;
   clearError: () => void;
+  refetchTenantOAuth: () => void;
 }
 
 const GmailContext = createContext<GmailContextValue | null>(null);
@@ -40,10 +41,31 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
   const { currentTenantId } = useTenant();
   const toast = useToast();
   const [gmailSync, setGmailSync] = useState<GmailSyncRow | null>(null);
+  const [tenantOAuthClientId, setTenantOAuthClientId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [savingGroupEmail, setSavingGroupEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const fetchTenantOAuth = useCallback(() => {
+    if (!currentTenantId) {
+      setTenantOAuthClientId(null);
+      return;
+    }
+    supabase
+      .from('tenant_google_oauth')
+      .select('client_id')
+      .eq('tenant_id', currentTenantId)
+      .maybeSingle()
+      .then(({ data }) => {
+        const row = data as { client_id?: string } | null;
+        setTenantOAuthClientId(row?.client_id?.trim() ?? null);
+      });
+  }, [currentTenantId]);
+
+  useEffect(() => {
+    fetchTenantOAuth();
+  }, [fetchTenantOAuth]);
 
   const fetchGmailSync = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser();
@@ -78,26 +100,49 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id);
   }, [gmailSync, currentTenantId, fetchGmailSync]);
 
-  const connectGmail = () => {
+  const GMAIL_CONNECT_GROUP_EMAIL_KEY = 'helpdesk_gmail_connect_group_email';
+  const GMAIL_CONNECT_ACCOUNT_TYPE_KEY = 'helpdesk_gmail_connect_account_type';
+
+  const connectGmail = (teamEmail?: string | null, accountType?: 'user' | 'group') => {
     setError(null);
-    const url = getGmailAuthUrl();
-    if (!url) {
-      setError('Google OAuth er ikke konfigurert. Be din administrator om å sette VITE_GOOGLE_CLIENT_ID ved bygg av frontend.');
+    if (!currentTenantId) {
+      setError('Velg en organisasjon først (øverst på siden), deretter prøv å koble til Gmail igjen.');
       return;
+    }
+    const clientId = tenantOAuthClientId?.trim() ?? null;
+    const url = clientId ? getGmailAuthUrl(currentTenantId, clientId) : null;
+    if (!url) {
+      setError('Google OAuth er ikke konfigurert for denne organisasjonen. Be en administrator om å legge til Client ID og Secret under E-post innbokser.');
+      return;
+    }
+    if (typeof window !== 'undefined') {
+      if (teamEmail?.trim()) window.sessionStorage.setItem(GMAIL_CONNECT_GROUP_EMAIL_KEY, teamEmail.trim());
+      if (accountType) window.sessionStorage.setItem(GMAIL_CONNECT_ACCOUNT_TYPE_KEY, accountType);
     }
     window.location.href = url;
   };
 
   const handleOAuthCallback = useCallback(
-    async (code: string): Promise<boolean> => {
+    async (code: string, tenantIdFromState?: string | null, groupEmail?: string | null): Promise<{ ok: boolean; error?: string }> => {
       setError(null);
-      const result = await exchangeOAuthCodeForTokens(code, currentTenantId ?? undefined);
-      if (result.success) {
-        fetchGmailSync().catch(() => {});
-        return true;
+      const tenantIdToUse = tenantIdFromState ?? currentTenantId ?? undefined;
+      if (!tenantIdToUse) {
+        const err = 'Kunne ikke bestemme organisasjon. Prøv å velge organisasjon øverst på siden og koble til Gmail på nytt.';
+        setError(err);
+        return { ok: false, error: err };
       }
-      setError(result.error || 'Failed to connect Gmail');
-      return false;
+      const result = await exchangeOAuthCodeForTokens(code, tenantIdToUse, groupEmail ?? undefined);
+      if (result.success) {
+        if (typeof window !== 'undefined') {
+          window.sessionStorage.removeItem('helpdesk_gmail_connect_group_email');
+          window.sessionStorage.removeItem('helpdesk_gmail_connect_account_type');
+        }
+        fetchGmailSync().catch(() => {});
+        return { ok: true };
+      }
+      const err = result.error || 'Kunne ikke koble til Gmail.';
+      setError(err);
+      return { ok: false, error: err };
     },
     [fetchGmailSync, currentTenantId]
   );
@@ -150,12 +195,13 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     savingGroupEmail,
     error,
     connectGmail,
-    isGmailOAuthConfigured: isGmailOAuthConfigured(),
+    isGmailOAuthConfigured: !!tenantOAuthClientId?.trim(),
     handleOAuthCallback,
     syncNow,
     disconnect,
     updateGroupEmail,
     clearError: () => setError(null),
+    refetchTenantOAuth: fetchTenantOAuth,
   };
 
   return <GmailContext.Provider value={value}>{children}</GmailContext.Provider>;

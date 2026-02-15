@@ -131,7 +131,7 @@ export function TicketsPage() {
       if (email) {
         const ticketRef = ticket.ticket_number ?? ticket.id.slice(0, 8);
         const body = `Vi har mottatt henvendelsen din.\n\nReferanse: ${ticketRef}\n\nVi kommer tilbake til deg så snart vi kan.`;
-        const sent = await sendGmailForward(email, subject.trim(), body);
+        const sent = await sendGmailForward(email, subject.trim(), body, undefined, undefined, currentTenantId ?? undefined);
         if (!sent.success) setCreateError(sent.error ?? 'E-post kunne ikke sendes');
       }
       setShowNew(false);

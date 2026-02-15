@@ -20,6 +20,7 @@ import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { PlanningPage } from './pages/PlanningPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AddEmailInboxPage } from './pages/AddEmailInboxPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 
 function HomeOrLanding() {
@@ -55,6 +56,7 @@ function AppRoutes() {
         <Route path="planning" element={<PlanningPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="settings/inboxes/new" element={<AddEmailInboxPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGmail } from '../contexts/GmailContext';
+import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../services/supabase';
 
 export function OAuthCallbackPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { handleOAuthCallback } = useGmail();
+  const { setCurrentTenantId } = useTenant();
   const [status, setStatus] = useState<'pending' | 'success' | 'error'>('pending');
   const [message, setMessage] = useState('');
   const hasStartedRef = useRef(false);
@@ -14,6 +16,7 @@ export function OAuthCallbackPage() {
   useEffect(() => {
     const code = searchParams.get('code');
     const errorParam = searchParams.get('error');
+    const state = searchParams.get('state');
 
     if (errorParam) {
       setStatus('error');
@@ -30,6 +33,10 @@ export function OAuthCallbackPage() {
     // Run only once per page load so we don't flood the API (avoids 401 spam from re-runs).
     if (hasStartedRef.current) return;
     hasStartedRef.current = true;
+
+    const tenantIdFromState = state && /^[a-f0-9-]{36}$/i.test(state) ? state : null;
+    const groupEmail =
+      typeof window !== 'undefined' ? window.sessionStorage.getItem('helpdesk_gmail_connect_group_email') : null;
 
     let cancelled = false;
 
@@ -48,22 +55,23 @@ export function OAuthCallbackPage() {
         }
       }
 
-      handleOAuthCallback(code)
-        .then((ok) => {
+      handleOAuthCallback(code, tenantIdFromState, groupEmail)
+        .then((result) => {
           if (cancelled) return;
-          if (ok) {
+          if (result.ok) {
+            if (tenantIdFromState) setCurrentTenantId(tenantIdFromState);
             setStatus('success');
             setMessage('Gmail er koblet til. Omdirigerer…');
-            setTimeout(() => navigate('/settings', { replace: true }), 1500);
+            setTimeout(() => navigate('/settings?tab=inboxes', { replace: true }), 1500);
           } else {
             setStatus('error');
-            setMessage('Kunne ikke koble til Gmail. Prøv igjen.');
+            setMessage(result.error || 'Kunne ikke koble til Gmail. Prøv igjen.');
           }
         })
-        .catch(() => {
+        .catch((e) => {
           if (cancelled) return;
           setStatus('error');
-          setMessage('Noe gikk galt. Gå til innstillinger og prøv igjen.');
+          setMessage(e?.message || 'Noe gikk galt. Gå til innstillinger og prøv igjen.');
         });
     };
 

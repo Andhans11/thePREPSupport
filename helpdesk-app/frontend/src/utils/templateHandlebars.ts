@@ -39,5 +39,5 @@ export const TEMPLATE_VARIABLES = {
 export const TEMPLATE_VARIABLES_PREVIEW: Record<string, unknown> = {
   customer: { name: 'Jane Doe', email: 'jane@example.com', company: 'Acme Inc.' },
   ticket: { subject: 'Billing question', ticket_number: 'TKT-0042' },
-  agent: { name: 'Support Agent', email: 'support@theprep.ai' },
+  agent: { name: 'Support Agent', email: 'agent@example.com' },
 };

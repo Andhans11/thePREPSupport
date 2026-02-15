@@ -1,13 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { useTenant } from '../../contexts/TenantContext';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
 import { useNotifications } from '../../hooks/useNotifications';
 import { getNotificationIcon } from '../../utils/notificationIcons';
 import { isAdmin, canAccessSettings } from '../../types/roles';
 import { AVAILABILITY_LABELS, AVAILABILITY_COLORS, type AvailabilityStatus } from '../../types/availability';
-import { supabase } from '../../services/supabase';
 import {
   LogOut,
   Mail,
@@ -15,14 +13,10 @@ import {
   Users,
   ChevronRight,
   Bell,
-  Building2,
-  ChevronDown,
   Check,
   Moon,
   Minus,
   X,
-  Plus,
-  Loader2,
   List,
 } from 'lucide-react';
 
@@ -52,79 +46,27 @@ function formatNotificationTime(created_at: string): string {
 
 export function Header() {
   const { user, signOut } = useAuth();
-  const { tenants, currentTenantId, setCurrentTenantId, loading: tenantLoading } = useTenant();
   const navigate = useNavigate();
   const [userOpen, setUserOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [tenantOpen, setTenantOpen] = useState(false);
-  const [createOrgModalOpen, setCreateOrgModalOpen] = useState(false);
-  const [newOrgName, setNewOrgName] = useState('');
-  const [creatingOrg, setCreatingOrg] = useState(false);
-  const [createOrgError, setCreateOrgError] = useState<string | null>(null);
   const userRef = useRef<HTMLDivElement>(null);
   const statusRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
-  const tenantRef = useRef<HTMLDivElement>(null);
 
   const { role, availableForEmail, setAvailableForEmail, availabilityStatus, setAvailabilityStatus, teamMemberId } = useCurrentUserRole();
   const { items: notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications({ unreadOnly: true });
   const admin = isAdmin(role);
-  const currentTenant = tenants.find((t) => t.id === currentTenantId);
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!currentTenantId) {
-      setLogoUrl(null);
-      return;
-    }
-    supabase
-      .from('company_settings')
-      .select('value')
-      .eq('tenant_id', currentTenantId)
-      .eq('key', 'company_logo_url')
-      .maybeSingle()
-      .then(({ data }) => {
-        const v = (data as { value: unknown } | null)?.value;
-        setLogoUrl(typeof v === 'string' ? v : null);
-      });
-  }, [currentTenantId]);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (userRef.current && !userRef.current.contains(e.target as Node)) setUserOpen(false);
       if (statusRef.current && !statusRef.current.contains(e.target as Node)) setStatusOpen(false);
       if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
-      if (tenantRef.current && !tenantRef.current.contains(e.target as Node)) setTenantOpen(false);
     }
     document.addEventListener('click', handleClick);
     return () => document.removeEventListener('click', handleClick);
   }, []);
-
-  async function handleCreateOrg() {
-    const name = newOrgName.trim();
-    if (!name) return;
-    setCreateOrgError(null);
-    setCreatingOrg(true);
-    const { data, error } = await supabase.rpc('create_tenant_and_join', { tenant_name: name });
-    setCreatingOrg(false);
-    if (error) {
-      setCreateOrgError(error.message || 'Kunne ikke opprette organisasjon');
-      return;
-    }
-    const payload = data as { ok?: boolean; tenant_id?: string; error?: string };
-    if (!payload?.ok || !payload.tenant_id) {
-      setCreateOrgError(payload?.error || 'Kunne ikke opprette organisasjon');
-      return;
-    }
-    setCurrentTenantId(payload.tenant_id);
-    setCreateOrgModalOpen(false);
-    setTenantOpen(false);
-    setNewOrgName('');
-    setCreateOrgError(null);
-    // Full reload so all contexts (notifications, tickets, etc.) refetch for the new tenant only
-    window.location.reload();
-  }
 
   const statusIcons: Record<AvailabilityStatus, typeof Check> = {
     active: Check,
@@ -162,81 +104,8 @@ export function Header() {
   const displayName = user?.user_metadata?.full_name || user?.email;
 
   return (
-    <header className="h-14 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] flex items-center justify-between gap-2 px-4 shrink-0">
-      {/* Tenant switcher */}
-      <div className="relative" ref={tenantRef}>
-        {!tenantLoading && tenants.length === 0 && (
-          <p className="text-sm text-[var(--hiver-text-muted)] px-2">
-            Ingen organisasjon. Hadde du en invitasjon?{' '}
-            <a href="/accept-invite" className="text-[var(--hiver-accent)] hover:underline">
-              Åpne invitasjonslenken fra e-posten
-            </a>
-            {' '}for å bli med.
-          </p>
-        )}
-        {!tenantLoading && tenants.length > 0 && (
-          <>
-            <button
-              type="button"
-              onClick={() => setTenantOpen((v) => !v)}
-              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)] border border-[var(--hiver-border)]"
-              aria-label="Bytt organisasjon"
-            >
-              <Building2 className="w-4 h-4 text-[var(--hiver-text-muted)]" />
-              <span className="max-w-[140px] truncate">{currentTenant?.name ?? 'Organisasjon'}</span>
-              <ChevronDown className={`w-4 h-4 text-[var(--hiver-text-muted)] transition ${tenantOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {tenantOpen && (
-              <div className="absolute left-0 top-full mt-1 min-w-[220px] max-h-80 overflow-y-auto card-panel shadow-[var(--hiver-shadow-md)] z-50">
-                <ul>
-                  {tenants.map((t) => (
-                    <li key={t.id}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCurrentTenantId(t.id);
-                          setTenantOpen(false);
-                        }}
-                        className={`w-full text-left px-4 py-2.5 text-sm hover:bg-[var(--hiver-bg)] ${t.id === currentTenantId ? 'font-medium text-[var(--hiver-accent)]' : 'text-[var(--hiver-text)]'}`}
-                      >
-                        {t.name}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-                <hr className="border-[var(--hiver-border)] my-1" />
-                <div className="py-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setTenantOpen(false);
-                      setNewOrgName('');
-                      setCreateOrgError(null);
-                      setCreateOrgModalOpen(true);
-                    }}
-                    className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-[var(--hiver-accent)] hover:bg-[var(--hiver-bg)]"
-                  >
-                    <Plus className="w-4 h-4" />
-                    Legg til ny organisasjon
-                  </button>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
+    <header className="h-14 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] flex items-center justify-end gap-2 px-4 shrink-0">
       <div className="flex items-center gap-2">
-      {/* Company logo (top right) */}
-      {logoUrl && (
-        <div className="flex items-center shrink-0">
-          <img
-            src={logoUrl}
-            alt=""
-            className="h-9 w-auto max-w-[140px] object-contain object-right"
-          />
-        </div>
-      )}
       {/* Notifications */}
       <div className="relative" ref={notifRef}>
         <button
@@ -495,91 +364,6 @@ export function Header() {
       </div>
       </div>
 
-      {/* Create new organisation modal */}
-      {createOrgModalOpen && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50"
-          onClick={() => !creatingOrg && (setCreateOrgModalOpen(false), setCreateOrgError(null))}
-          onKeyDown={(e) => e.key === 'Escape' && !creatingOrg && (setCreateOrgModalOpen(false), setCreateOrgError(null))}
-          role="presentation"
-        >
-          <div
-            className="w-full max-w-md rounded-xl card-panel shadow-[var(--hiver-shadow-md)] p-6"
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.key === 'Escape' && (setCreateOrgModalOpen(false), setCreateOrgError(null))}
-            aria-modal="true"
-            aria-labelledby="create-org-modal-title"
-          >
-            <div className="flex items-center justify-between mb-4">
-              <h2 id="create-org-modal-title" className="text-lg font-semibold text-[var(--hiver-text)]">
-                Ny organisasjon
-              </h2>
-              <button
-                type="button"
-                onClick={() => !creatingOrg && (setCreateOrgModalOpen(false), setCreateOrgError(null))}
-                disabled={creatingOrg}
-                className="p-1.5 rounded-lg text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-text)] disabled:opacity-50"
-                aria-label="Lukk"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <p className="text-sm text-[var(--hiver-text-muted)] mb-4">
-              Fyll ut informasjonen under for å opprette en ny organisasjon. Du blir satt som administrator.
-            </p>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (newOrgName.trim()) handleCreateOrg();
-              }}
-              className="space-y-4"
-            >
-              <div>
-                <label htmlFor="create-org-name" className="block text-sm font-medium text-[var(--hiver-text)] mb-1.5">
-                  Organisasjonsnavn <span className="text-red-500">*</span>
-                </label>
-                <input
-                  id="create-org-name"
-                  type="text"
-                  value={newOrgName}
-                  onChange={(e) => setNewOrgName(e.target.value)}
-                  placeholder="F.eks. Mitt selskap AS"
-                  className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2.5 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] bg-[var(--hiver-panel-bg)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 focus:border-[var(--hiver-accent)]"
-                  autoFocus
-                  disabled={creatingOrg}
-                />
-              </div>
-              {createOrgError && (
-                <p className="text-sm text-red-600" role="alert">
-                  {createOrgError}
-                </p>
-              )}
-              <div className="flex gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreateOrgModalOpen(false);
-                    setNewOrgName('');
-                    setCreateOrgError(null);
-                  }}
-                  disabled={creatingOrg}
-                  className="flex-1 px-4 py-2.5 rounded-lg border border-[var(--hiver-border)] text-sm font-medium text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)] disabled:opacity-50"
-                >
-                  Avbryt
-                </button>
-                <button
-                  type="submit"
-                  disabled={!newOrgName.trim() || creatingOrg}
-                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-[var(--hiver-accent)] text-sm font-medium text-white hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50"
-                >
-                  {creatingOrg ? <Loader2 className="w-4 h-4 animate-spin" /> : null}
-                  Opprett organisasjon
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
     </header>
   );
 }

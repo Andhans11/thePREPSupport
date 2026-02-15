@@ -1,9 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CLIENT_ID');
-const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_CLIENT_SECRET');
-
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -19,13 +16,13 @@ function encodeBase64Url(str: string): string {
   return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-async function getAccessToken(refreshToken: string): Promise<string> {
+async function getAccessToken(refreshToken: string, clientId: string, clientSecret: string): Promise<string> {
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID!,
-      client_secret: GOOGLE_CLIENT_SECRET!,
+      client_id: clientId,
+      client_secret: clientSecret,
       refresh_token: refreshToken,
       grant_type: 'refresh_token',
     }),
@@ -63,7 +60,7 @@ serve(async (req) => {
     });
   }
 
-  let body: { to: string; subject: string; messagePlain: string; messageHtml?: string; attachment?: { filename: string; mimeType: string; contentBase64: string } };
+  let body: { to: string; subject: string; messagePlain: string; messageHtml?: string; tenant_id?: string | null; attachment?: { filename: string; mimeType: string; contentBase64: string } };
   try {
     body = await req.json();
   } catch {
@@ -73,29 +70,51 @@ serve(async (req) => {
     });
   }
 
-  const { to, subject, messagePlain, messageHtml, attachment } = body;
+  const { to, subject, messagePlain, messageHtml, tenant_id: tenantId, attachment } = body;
   if (!to || !subject || !messagePlain) {
     return new Response(JSON.stringify({ error: 'Missing to, subject, or messagePlain' }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
-
-  const { data: gmailRow } = await supabase
-    .from('gmail_sync')
-    .select('refresh_token, email_address, group_email')
-    .eq('user_id', user.id)
-    .eq('is_active', true)
-    .maybeSingle();
-
-  if (!gmailRow?.refresh_token) {
-    return new Response(JSON.stringify({ error: 'Gmail not connected' }), {
+  if (!tenantId) {
+    return new Response(JSON.stringify({ error: 'Missing tenant_id' }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
-  const accessToken = await getAccessToken(gmailRow.refresh_token);
+  const serviceSupabase = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
+  const { data: gmailRow } = await serviceSupabase
+    .from('gmail_sync')
+    .select('refresh_token, email_address, group_email')
+    .eq('user_id', user.id)
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (!gmailRow?.refresh_token) {
+    return new Response(JSON.stringify({ error: 'Gmail not connected for this organisation' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { data: oauthRow } = await serviceSupabase
+    .from('tenant_google_oauth')
+    .select('client_id, client_secret')
+    .eq('tenant_id', tenantId)
+    .maybeSingle();
+  if (!oauthRow?.client_id?.trim() || !oauthRow?.client_secret?.trim()) {
+    return new Response(
+      JSON.stringify({ error: 'Google OAuth er ikke konfigurert for denne organisasjonen.' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+  const accessToken = await getAccessToken(gmailRow.refresh_token, oauthRow.client_id.trim(), oauthRow.client_secret.trim());
 
   const row = gmailRow as { refresh_token: string; email_address?: string; group_email?: string | null };
   const fromAddress = (row.group_email?.trim() || row.email_address || user.email || '').trim() || user.email!;

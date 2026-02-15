@@ -119,7 +119,7 @@ export function ForwardBox({ ticketSubject, onSent }: ForwardBoxProps) {
     setSending(true);
     try {
       const htmlBody = editorRef.current?.innerHTML ?? null;
-      const result = await sendGmailForward(email, subject.trim(), trimmed, htmlBody, attachment ?? undefined);
+      const result = await sendGmailForward(email, subject.trim(), trimmed, htmlBody, attachment ?? undefined, currentTenantId ?? undefined);
       if (!result.success) {
         setError(result.error || 'Kunne ikke sende');
         setSending(false);

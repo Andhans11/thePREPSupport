@@ -37,7 +37,7 @@ This builds the frontend, commits any uncommitted changes, and pushes to GitHub.
    | `VITE_GOOGLE_CLIENT_ID`  | Your Google OAuth client ID | From Google Cloud Console. If omitted, the app runs but “Koble til Gmail-konto” is disabled and shows an explanation. |
    | `VITE_GOOGLE_REDIRECT_URI` | `https://your-app.vercel.app/oauth/callback` | Your Vercel URL + `/oauth/callback` |
 
-7. **Deploy.** After the first deploy, set `VITE_GOOGLE_REDIRECT_URI` to the real URL (e.g. `https://your-project.vercel.app/oauth/callback`) and redeploy if you changed it.
+7. **Deploy.** Set `VITE_GOOGLE_REDIRECT_URI` to your production URL (e.g. `https://your-project.vercel.app/oauth/callback`).
 
 ### Option B: Vercel CLI
 
@@ -89,6 +89,7 @@ Or in **Supabase Dashboard** → **SQL Editor**: run the contents of each migrat
 
 ```bash
 cd helpdesk-app/backend
+npx supabase functions deploy oauth-gmail-callback
 npx supabase functions deploy send-gmail-reply
 npx supabase functions deploy send-gmail-forward
 npx supabase functions deploy send-invitation-email
@@ -96,9 +97,12 @@ npx supabase functions deploy sync-gmail-emails
 # Or deploy all: npx supabase functions deploy
 ```
 
+Set **REDIRECT_URI** for `oauth-gmail-callback` (Supabase Dashboard → Edge Functions → oauth-gmail-callback → Secrets): e.g. `https://your-app.vercel.app/oauth/callback`.
+
 Set secrets (Dashboard → Edge Functions → Secrets or CLI):
 
-- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+- **`REDIRECT_URI`** – **Required for Gmail OAuth.** Set to your production callback URL, e.g. `https://your-app.vercel.app/oauth/callback`. Must be identical to `VITE_GOOGLE_REDIRECT_URI` and to the URI in Google Console "Authorized redirect URIs". No default (do not use localhost in production).
+- Google Client ID/Secret are configured **per tenant** in the app (E-post innbokser, admin). No global `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` in Edge Function env unless you add them for a fallback.
 - For cron: `CRON_SECRET`, and vault secrets `project_url`, `gmail_sync_cron_secret` (see `scripts/create-vault-secrets-for-cron.sql`).
 
 ---

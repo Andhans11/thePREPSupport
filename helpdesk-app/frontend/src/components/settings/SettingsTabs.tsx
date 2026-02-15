@@ -1,12 +1,13 @@
 import { useSearchParams } from 'react-router-dom';
-import { Building2, Users, UsersRound, FileText, Clock, FileSignature, Database } from 'lucide-react';
+import { Building2, Users, UsersRound, FileText, Clock, FileSignature, Database, Mail } from 'lucide-react';
 import { canManageUsers } from '../../types/roles';
 import type { Role } from '../../types/roles';
 
-export type SettingsTabId = 'company' | 'users' | 'teams' | 'templates' | 'business_hours' | 'signatures' | 'master_data';
+export type SettingsTabId = 'company' | 'inboxes' | 'users' | 'teams' | 'templates' | 'business_hours' | 'signatures' | 'master_data';
 
 const TABS: { id: SettingsTabId; label: string; icon: typeof Building2; requiresAdmin?: boolean }[] = [
   { id: 'company', label: 'Selskap', icon: Building2 },
+  { id: 'inboxes', label: 'E-post innbokser', icon: Mail },
   { id: 'users', label: 'Brukere', icon: Users, requiresAdmin: true },
   { id: 'teams', label: 'Team', icon: UsersRound, requiresAdmin: true },
   { id: 'templates', label: 'Maler', icon: FileText, requiresAdmin: true },

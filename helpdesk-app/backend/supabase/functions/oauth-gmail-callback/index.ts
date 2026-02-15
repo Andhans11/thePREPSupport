@@ -1,9 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CLIENT_ID');
-const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_CLIENT_SECRET');
-const REDIRECT_URI = Deno.env.get('REDIRECT_URI') || 'http://localhost:5173/oauth/callback';
+const REDIRECT_URI = (Deno.env.get('REDIRECT_URI') || '').trim();
 
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -48,7 +46,7 @@ serve(async (req) => {
     );
   }
 
-  let body: { code?: string; tenant_id?: string | null };
+  let body: { code?: string; tenant_id?: string | null; group_email?: string | null };
   try {
     body = await req.json();
   } catch {
@@ -60,6 +58,7 @@ serve(async (req) => {
 
   const code = body.code;
   const tenantId = body.tenant_id ?? null;
+  const groupEmail = body.group_email?.trim() || null;
   if (!code) {
     return new Response(JSON.stringify({ error: 'Missing code' }), {
       status: 400,
@@ -73,11 +72,28 @@ serve(async (req) => {
     });
   }
 
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-    return new Response(JSON.stringify({ error: 'Server misconfiguration' }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+  const serviceSupabaseForOAuth = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+  );
+  const { data: oauthRow, error: oauthError } = await serviceSupabaseForOAuth
+    .from('tenant_google_oauth')
+    .select('client_id, client_secret')
+    .eq('tenant_id', tenantId)
+    .maybeSingle();
+
+  if (oauthError || !oauthRow?.client_id?.trim() || !oauthRow?.client_secret?.trim()) {
+    return new Response(
+      JSON.stringify({ error: 'Google OAuth er ikke konfigurert for denne organisasjonen. Be en administrator om å legge til Client ID og Secret under E-post innbokser.' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  if (!REDIRECT_URI) {
+    return new Response(
+      JSON.stringify({ error: 'REDIRECT_URI er ikke satt i Edge Function-miljøet. Sett REDIRECT_URI til appens callback-URL (f.eks. https://dittdomene.no/oauth/callback).' }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 
   const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
@@ -85,16 +101,28 @@ serve(async (req) => {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       code,
-      client_id: GOOGLE_CLIENT_ID,
-      client_secret: GOOGLE_CLIENT_SECRET,
+      client_id: oauthRow.client_id.trim(),
+      client_secret: oauthRow.client_secret.trim(),
       redirect_uri: REDIRECT_URI,
       grant_type: 'authorization_code',
     }),
   });
 
   if (!tokenRes.ok) {
-    const err = await tokenRes.text();
-    return new Response(JSON.stringify({ error: 'Token exchange failed', details: err }), {
+    const errText = await tokenRes.text();
+    let details = errText;
+    try {
+      const errJson = JSON.parse(errText) as { error?: string; error_description?: string };
+      if (errJson.error || errJson.error_description) {
+        details = [errJson.error, errJson.error_description].filter(Boolean).join(': ');
+      }
+    } catch {
+      // keep raw errText
+    }
+    const message = details.includes('redirect_uri') 
+      ? `Omdirigerings-URI stemmer ikke. Sjekk at REDIRECT_URI i Edge Function er nøyaktig lik i Google Console og i frontend. Detaljer: ${details}`
+      : `Token exchange failed: ${details}`;
+    return new Response(JSON.stringify({ error: message, details: errText }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -121,16 +149,12 @@ serve(async (req) => {
     if (profile.emailAddress) emailAddress = profile.emailAddress;
   }
 
-  const serviceSupabase = createClient(
-    Deno.env.get('SUPABASE_URL') ?? '',
-    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-  );
-
-  const { error: upsertError } = await serviceSupabase.from('gmail_sync').upsert(
+  const { error: upsertError } = await serviceSupabaseForOAuth.from('gmail_sync').upsert(
     {
       tenant_id: tenantId,
       user_id: user.id,
       email_address: emailAddress,
+      group_email: groupEmail,
       refresh_token: refreshToken,
       access_token: accessToken,
       token_expiry: expiry,

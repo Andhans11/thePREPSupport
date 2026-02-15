@@ -1,6 +1,7 @@
 import { useCurrentUserRole } from '../hooks/useCurrentUserRole';
 import { SettingsTabs, useSettingsTab } from '../components/settings/SettingsTabs';
 import { CompanySettings } from '../components/settings/CompanySettings';
+import { EmailInboxesSettings } from '../components/settings/EmailInboxesSettings';
 import { UsersSettings } from '../components/settings/UsersSettings';
 import { TeamsSettings } from '../components/settings/TeamsSettings';
 import { TemplatesSettings } from '../components/settings/TemplatesSettings';
@@ -36,6 +37,7 @@ export function SettingsPage() {
       </div>
       <SettingsTabs currentRole={role}>
         {tab === 'company' && <CompanySettings />}
+        {tab === 'inboxes' && <EmailInboxesSettings />}
         {tab === 'users' && <UsersSettings />}
         {tab === 'teams' && <TeamsSettings />}
         {tab === 'templates' && <TemplatesSettings />}

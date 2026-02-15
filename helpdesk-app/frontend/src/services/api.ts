@@ -3,7 +3,11 @@ import { supabase } from './supabase';
 const getSupabaseUrl = () => import.meta.env.VITE_SUPABASE_URL?.replace(/\/$/, '') || '';
 const getSupabaseAnonKey = () => import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
-export async function exchangeOAuthCodeForTokens(code: string, tenantId?: string): Promise<{ success: boolean; error?: string }> {
+export async function exchangeOAuthCodeForTokens(
+  code: string,
+  tenantId?: string,
+  groupEmail?: string | null
+): Promise<{ success: boolean; error?: string }> {
   await supabase.auth.refreshSession();
   const { data: { session } } = await supabase.auth.getSession();
   if (!session?.access_token) {
@@ -17,12 +21,18 @@ export async function exchangeOAuthCodeForTokens(code: string, tenantId?: string
       Authorization: `Bearer ${session.access_token}`,
       apikey: getSupabaseAnonKey(),
     },
-    body: JSON.stringify({ code, tenant_id: tenantId ?? null }),
+    body: JSON.stringify({
+      code,
+      tenant_id: tenantId ?? null,
+      group_email: groupEmail ?? null,
+    }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     const message = json.message || json.error || res.statusText;
-    return { success: false, error: typeof message === 'string' ? message : res.statusText };
+    let err = typeof message === 'string' ? message : res.statusText;
+    if (json.details && typeof json.details === 'string') err += ` (${json.details})`;
+    return { success: false, error: err };
   }
   return { success: true };
 }
@@ -92,7 +102,8 @@ export async function sendGmailForward(
   subject: string,
   messagePlain: string,
   messageHtml?: string | null,
-  attachment?: EmailAttachment | null
+  attachment?: EmailAttachment | null,
+  tenantId?: string | null
 ): Promise<{ success: boolean; error?: string }> {
   const { data, error: refreshError } = await supabase.auth.refreshSession();
   const token = data.session?.access_token;
@@ -107,7 +118,7 @@ export async function sendGmailForward(
       Authorization: `Bearer ${token}`,
       apikey: getSupabaseAnonKey(),
     },
-    body: JSON.stringify({ to, subject, messagePlain, messageHtml, attachment }),
+    body: JSON.stringify({ to, subject, messagePlain, messageHtml, attachment, tenant_id: tenantId ?? null }),
   });
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {

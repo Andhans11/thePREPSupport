@@ -4,7 +4,7 @@ import { supabase } from '../../services/supabase';
 import { useTenant } from '../../contexts/TenantContext';
 import { useToast } from '../../contexts/ToastContext';
 import { SaveButton } from '../ui/SaveButton';
-import { GmailIntegration } from './GmailIntegration';
+import { Link } from 'react-router-dom';
 
 const LOGO_ACCEPT = 'image/png,image/jpeg,image/jpg,image/svg+xml';
 const LOGO_MAX_SIZE_MB = 2;
@@ -162,8 +162,10 @@ export function CompanySettings() {
           Selskap
         </h2>
         <p className="text-sm text-[var(--hiver-text-muted)] mb-6">
-          Selskapsinnstillinger og -info. Koble til en delt innboks (Gmail) til høyre for å opprette
-          og svare på saker fra e-post.
+          Selskapsinnstillinger og -info. For å koble til e-postinnbokser (Gmail eller Google-gruppe), gå til{' '}
+          <Link to="/settings?tab=inboxes" className="text-[var(--hiver-accent)] underline hover:no-underline">
+            E-post innbokser
+          </Link>.
         </p>
 
         {loading ? (
@@ -355,9 +357,6 @@ export function CompanySettings() {
           </>
         )}
       </section>
-      <div className="min-w-0">
-        <GmailIntegration />
-      </div>
     </div>
   );
 }

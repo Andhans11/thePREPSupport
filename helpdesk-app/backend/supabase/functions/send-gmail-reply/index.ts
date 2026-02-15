@@ -1,9 +1,6 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
-const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CLIENT_ID');
-const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_CLIENT_SECRET');
-
 const corsHeaders: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
@@ -61,13 +58,13 @@ function inlineDataUrlsAsCid(html: string): { html: string; parts: InlinePart[] 
   return { html: htmlOut, parts };
 }
 
-async function getAccessToken(refreshToken: string): Promise<string> {
+async function getAccessToken(refreshToken: string, clientId: string, clientSecret: string): Promise<string> {
   const res = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
-      client_id: GOOGLE_CLIENT_ID!,
-      client_secret: GOOGLE_CLIENT_SECRET!,
+      client_id: clientId,
+      client_secret: clientSecret,
       refresh_token: refreshToken,
       grant_type: 'refresh_token',
     }),
@@ -188,9 +185,20 @@ serve(async (req) => {
     });
   }
 
-  const accessToken = await getAccessToken(gmailRow.refresh_token);
+  const { data: oauthRow } = await serviceSupabase
+    .from('tenant_google_oauth')
+    .select('client_id, client_secret')
+    .eq('tenant_id', ticket.tenant_id)
+    .maybeSingle();
+  if (!oauthRow?.client_id?.trim() || !oauthRow?.client_secret?.trim()) {
+    return new Response(
+      JSON.stringify({ error: 'Google OAuth er ikke konfigurert for denne organisasjonen.' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+  const accessToken = await getAccessToken(gmailRow.refresh_token, oauthRow.client_id.trim(), oauthRow.client_secret.trim());
 
-  // Use group inbox (e.g. support@theprep.ai) when set in gmail_sync. Must be configured in Gmail as "Send mail as".
+  // Use group inbox when set in gmail_sync. Must be configured in Gmail as "Send mail as".
   const row = gmailRow as { refresh_token: string; email_address?: string; group_email?: string | null };
   const groupEmailTrimmed = row.group_email != null && String(row.group_email).trim() !== '' ? String(row.group_email).trim() : null;
   const fromAddress = groupEmailTrimmed

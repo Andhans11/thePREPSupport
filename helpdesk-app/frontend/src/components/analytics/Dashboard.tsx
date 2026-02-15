@@ -22,7 +22,10 @@ export function Dashboard() {
 
   useEffect(() => {
     async function load() {
-      const { data: tickets } = await supabase.from('tickets').select('status');
+      const { data: tickets } = await supabase
+        .from('tickets')
+        .select('status')
+        .neq('status', 'archived');
       const list = (tickets ?? []) as { status: string }[];
       const total = list.length;
       const open = list.filter((t) => t.status === 'open').length;

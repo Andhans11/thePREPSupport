@@ -5,6 +5,7 @@ import { ToastProvider } from './contexts/ToastContext';
 import { TicketProvider } from './contexts/TicketContext';
 import { GmailProvider } from './contexts/GmailContext';
 import { MasterDataProvider } from './contexts/MasterDataContext';
+import { DashboardProvider } from './contexts/DashboardContext';
 import { Layout } from './components/layout/Layout';
 import { DashboardPage } from './pages/DashboardPage';
 import { LoginPage } from './pages/LoginPage';
@@ -19,9 +20,12 @@ import { CustomersPage } from './pages/CustomersPage';
 import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { PlanningPage } from './pages/PlanningPage';
+import { TimeRegistrationPage } from './pages/TimeRegistrationPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AddEmailInboxPage } from './pages/AddEmailInboxPage';
 import { NotificationsPage } from './pages/NotificationsPage';
+import { useCurrentUserRole } from './hooks/useCurrentUserRole';
+import { canAccessAnalytics } from './types/roles';
 
 function HomeOrLanding() {
   const { user, loading } = useAuth();
@@ -38,6 +42,13 @@ function HomeOrLanding() {
   return <Layout />;
 }
 
+function AnalyticsGuard() {
+  const { role, loading } = useCurrentUserRole();
+  if (loading) return null;
+  if (!canAccessAnalytics(role)) return <Navigate to="/" replace />;
+  return <AnalyticsPage />;
+}
+
 function AppRoutes() {
   return (
     <Routes>
@@ -52,8 +63,9 @@ function AppRoutes() {
         <Route path="tickets" element={<TicketsPage />} />
         <Route path="customers" element={<CustomersPage />} />
         <Route path="customers/:id" element={<CustomerDetailPage />} />
-        <Route path="analytics" element={<AnalyticsPage />} />
+        <Route path="analytics" element={<AnalyticsGuard />} />
         <Route path="planning" element={<PlanningPage />} />
+        <Route path="timeregistrering" element={<TimeRegistrationPage />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/inboxes/new" element={<AddEmailInboxPage />} />
@@ -71,9 +83,11 @@ export default function App() {
           <ToastProvider>
             <GmailProvider>
               <MasterDataProvider>
-                <TicketProvider>
-                  <AppRoutes />
-                </TicketProvider>
+                <DashboardProvider>
+                  <TicketProvider>
+                    <AppRoutes />
+                  </TicketProvider>
+                </DashboardProvider>
               </MasterDataProvider>
             </GmailProvider>
           </ToastProvider>

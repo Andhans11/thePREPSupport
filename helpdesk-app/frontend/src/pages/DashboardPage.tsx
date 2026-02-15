@@ -1,17 +1,16 @@
-import { useEffect, useState, useRef } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
-import { useMasterData } from '../contexts/MasterDataContext';
 import { useCurrentUserRole } from '../hooks/useCurrentUserRole';
-import { canSeeTeamStatusDashboard } from '../types/roles';
+import { useDashboard } from '../contexts/DashboardContext';
+import { canSeeTeamStatusDashboard, canAccessAnalytics, isAdmin, canReplyToTickets, canApproveRejectOwnSlots, canManagePlanningSlots } from '../types/roles';
 import { formatListTime } from '../utils/formatters';
-import { startOfWeek, endOfWeek, eachDayOfInterval, format, subDays, startOfDay, addDays, isBefore } from 'date-fns';
+import { format } from 'date-fns';
 import {
   AVAILABILITY_LABELS,
   AVAILABILITY_COLORS,
-  sortByAvailabilityStatus,
   type AvailabilityStatus,
 } from '../types/availability';
 import {
@@ -19,6 +18,7 @@ import {
   ArrowRight,
   Users,
   Check,
+  Ban,
   Moon,
   Minus,
   X,
@@ -26,65 +26,11 @@ import {
   BarChart3,
   TrendingUp,
   CalendarClock,
+  Clock,
+  Bell,
 } from 'lucide-react';
-import type { Ticket as TicketType } from '../types/ticket';
 
-interface PlanningSlotOnDashboard {
-  id: string;
-  team_member_id: string;
-  start_at: string;
-  end_at: string;
-  team_member?: { id: string; name: string; email: string };
-}
-
-interface TeamMemberForList {
-  id: string;
-  name: string;
-  email: string;
-  user_id: string | null;
-  is_active: boolean;
-  availability_status: string | null;
-  last_seen_at: string | null;
-}
-
-/** Consider "no active session" if last_seen_at is older than this (ms). */
-const LAST_SEEN_OFFLINE_MS = 5 * 60 * 1000;
-
-/** Display status: not logged in → Frakoblet; no recent session → Frakoblet; inactive → Borte; else DB availability_status. */
-function getDisplayStatus(m: TeamMemberForList): AvailabilityStatus {
-  if (m.user_id == null) return 'offline';
-  if (!m.is_active) return 'away';
-  if (m.last_seen_at) {
-    const age = Date.now() - new Date(m.last_seen_at).getTime();
-    if (age > LAST_SEEN_OFFLINE_MS) return 'offline';
-  } else {
-    return 'offline';
-  }
-  const s = m.availability_status;
-  return s && ['active', 'away', 'busy', 'offline'].includes(s) ? (s as AvailabilityStatus) : 'active';
-}
-
-const DAY_LABELS: Record<number, string> = { 0: 'Søn', 1: 'Man', 2: 'Tir', 3: 'Ons', 4: 'Tor', 5: 'Fre', 6: 'Lør' };
-
-/** Schedule from business_hour_templates: day key -> { start, end } or null if closed. */
-type BusinessSchedule = Record<string, { start: string; end: string } | null>;
-const SCHEDULE_DAY_KEYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'] as const;
-
-function isWorkingDay(d: Date, schedule: BusinessSchedule | null): boolean {
-  if (!schedule) return d.getDay() >= 1 && d.getDay() <= 5;
-  const key = SCHEDULE_DAY_KEYS[d.getDay()];
-  return !!schedule[key];
-}
-
-/** First calendar day after today that has opening hours. */
-function getNextWorkingDay(fromDate: Date, schedule: BusinessSchedule | null): Date {
-  let d = addDays(startOfDay(fromDate), 1);
-  for (let i = 0; i < 8; i++) {
-    if (isWorkingDay(d, schedule)) return d;
-    d = addDays(d, 1);
-  }
-  return d;
-}
+import { getDisplayStatus } from '../contexts/DashboardContext';
 
 const CHART_PAD = { left: 40, right: 24, top: 16, bottom: 28 };
 const CHART_HEIGHT = 200;
@@ -216,220 +162,31 @@ function MonthTrendlineChart({
 export function DashboardPage() {
   const { user } = useAuth();
   const { currentTenantId } = useTenant();
-  const { statuses } = useMasterData();
   const { role } = useCurrentUserRole();
+  const {
+    statusCounts,
+    mine,
+    unassigned,
+    recentMine,
+    recentUnassigned,
+    teamMembers,
+    weekOpenedByDay,
+    monthTrend,
+    planningSlotsNow,
+    planningSlotsToday,
+    planningSlotsNextWorkingDay,
+    nextWorkingDayLabel,
+    emptySlotsNextWorkingDay,
+    myPendingSlots,
+    pendingSlotsFromTeam,
+    loading,
+    refetch,
+  } = useDashboard();
   const showTeamStatus = canSeeTeamStatusDashboard(role);
-  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
-  const [mine, setMine] = useState(0);
-  const [unassigned, setUnassigned] = useState(0);
-  const [recentMine, setRecentMine] = useState<TicketType[]>([]);
-  const [recentUnassigned, setRecentUnassigned] = useState<TicketType[]>([]);
+  const canApproveRejectSlots = canApproveRejectOwnSlots(role);
+  const showAnalytics = canAccessAnalytics(role);
+  const showAdminLinks = isAdmin(role);
   const [recentTab, setRecentTab] = useState<'mine' | 'unassigned'>('mine');
-  const [teamMembers, setTeamMembers] = useState<TeamMemberForList[]>([]);
-  const [weekOpenedByDay, setWeekOpenedByDay] = useState<{ date: string; label: string; count: number }[]>([]);
-  const [monthTrend, setMonthTrend] = useState<{ date: string; label: string; opened: number; closed: number }[]>([]);
-  const [planningSlotsNow, setPlanningSlotsNow] = useState<PlanningSlotOnDashboard[]>([]);
-  const [planningSlotsToday, setPlanningSlotsToday] = useState<PlanningSlotOnDashboard[]>([]);
-  const [planningSlotsNextWorkingDay, setPlanningSlotsNextWorkingDay] = useState<PlanningSlotOnDashboard[]>([]);
-  const [nextWorkingDayLabel, setNextWorkingDayLabel] = useState<string>('');
-  const [loading, setLoading] = useState(true);
-  const loadRef = useRef<(() => Promise<void>) | null>(null);
-
-  useEffect(() => {
-    if (!currentTenantId) {
-      setStatusCounts({});
-      setMine(0);
-      setUnassigned(0);
-      setRecentMine([]);
-      setRecentUnassigned([]);
-      setTeamMembers([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    async function load() {
-      const [ticketsRes, membersRes] = await Promise.all([
-        supabase
-          .from('tickets')
-          .select(`
-            *,
-            customer:customers(email, name)
-          `)
-          .eq('tenant_id', currentTenantId)
-          .order('updated_at', { ascending: false })
-          .limit(100),
-        supabase
-          .from('team_members')
-          .select('id, name, email, user_id, is_active, availability_status, last_seen_at')
-          .eq('tenant_id', currentTenantId),
-      ]);
-      const list = (ticketsRes.data ?? []) as TicketType[];
-      const byStatus: Record<string, number> = {};
-      statuses.forEach((s) => {
-        byStatus[s.code] = list.filter((t) => t.status === s.code).length;
-      });
-      setStatusCounts(byStatus);
-      setMine(user ? list.filter((t) => t.assigned_to === user.id).length : 0);
-      setUnassigned(list.filter((t) => !t.assigned_to).length);
-      setRecentMine(user ? list.filter((t) => t.assigned_to === user.id).slice(0, 8) : []);
-      setRecentUnassigned(list.filter((t) => !t.assigned_to).slice(0, 8));
-      let members: TeamMemberForList[] = [];
-      if (membersRes.error) {
-        const fallback = await supabase
-          .from('team_members')
-          .select('id, name, email, user_id, is_active, last_seen_at')
-          .eq('tenant_id', currentTenantId);
-        members = ((fallback.data ?? []) as TeamMemberForList[]).map((m) => ({
-          ...m,
-          availability_status: m.is_active && m.user_id ? 'active' : m.user_id ? 'away' : 'offline',
-          last_seen_at: (m as TeamMemberForList).last_seen_at ?? null,
-        }));
-      } else {
-        members = (membersRes.data ?? []) as TeamMemberForList[];
-      }
-      setTeamMembers(
-        sortByAvailabilityStatus(
-          members.map((m) => ({ ...m, availability_status: getDisplayStatus(m) }))
-        )
-      );
-      const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
-      const weekEnd = endOfWeek(new Date(), { weekStartsOn: 1 });
-      const days = eachDayOfInterval({ start: weekStart, end: weekEnd });
-      const { data: weekTickets } = await supabase
-        .from('tickets')
-        .select('id, created_at')
-        .eq('tenant_id', currentTenantId)
-        .gte('created_at', weekStart.toISOString())
-        .lte('created_at', weekEnd.toISOString());
-      const byDay: Record<string, number> = {};
-      days.forEach((d) => {
-        byDay[format(d, 'yyyy-MM-dd')] = 0;
-      });
-      (weekTickets ?? []).forEach((t: { id: string; created_at: string }) => {
-        const key = format(new Date(t.created_at), 'yyyy-MM-dd');
-        if (byDay[key] !== undefined) byDay[key]++;
-      });
-      setWeekOpenedByDay(
-        days.map((d) => ({
-          date: format(d, 'yyyy-MM-dd'),
-          label: DAY_LABELS[d.getDay()],
-          count: byDay[format(d, 'yyyy-MM-dd')] ?? 0,
-        }))
-      );
-
-      // Last 30 days: opened (created_at) and closed (resolved_at) per day
-      const thirtyDaysAgo = subDays(new Date(), 30);
-      const monthDays = eachDayOfInterval({ start: thirtyDaysAgo, end: new Date() });
-      const [openedRes, closedRes] = await Promise.all([
-        supabase
-          .from('tickets')
-          .select('created_at')
-          .eq('tenant_id', currentTenantId)
-          .gte('created_at', thirtyDaysAgo.toISOString()),
-        supabase
-          .from('tickets')
-          .select('resolved_at')
-          .eq('tenant_id', currentTenantId)
-          .not('resolved_at', 'is', null)
-          .gte('resolved_at', thirtyDaysAgo.toISOString()),
-      ]);
-      const openedByDate: Record<string, number> = {};
-      const closedByDate: Record<string, number> = {};
-      monthDays.forEach((d) => {
-        const key = format(d, 'yyyy-MM-dd');
-        openedByDate[key] = 0;
-        closedByDate[key] = 0;
-      });
-      (openedRes.data ?? []).forEach((t: { created_at: string }) => {
-        const key = format(startOfDay(new Date(t.created_at)), 'yyyy-MM-dd');
-        if (openedByDate[key] !== undefined) openedByDate[key]++;
-      });
-      (closedRes.data ?? []).forEach((t: { resolved_at: string }) => {
-        const key = format(startOfDay(new Date(t.resolved_at)), 'yyyy-MM-dd');
-        if (closedByDate[key] !== undefined) closedByDate[key]++;
-      });
-      setMonthTrend(
-        monthDays.map((d) => {
-          const key = format(d, 'yyyy-MM-dd');
-          return {
-            date: key,
-            label: format(d, 'd. MMM'),
-            opened: openedByDate[key] ?? 0,
-            closed: closedByDate[key] ?? 0,
-          };
-        })
-      );
-
-      // Business hours: determine next working day
-      let businessSchedule: BusinessSchedule | null = null;
-      const { data: defaultScheduleRow } = await supabase
-        .from('business_hour_templates')
-        .select('schedule')
-        .eq('tenant_id', currentTenantId)
-        .eq('is_default', true)
-        .maybeSingle();
-      if (defaultScheduleRow?.schedule && typeof defaultScheduleRow.schedule === 'object' && !Array.isArray(defaultScheduleRow.schedule)) {
-        businessSchedule = defaultScheduleRow.schedule as BusinessSchedule;
-      } else {
-        const { data: firstRow } = await supabase
-          .from('business_hour_templates')
-          .select('schedule')
-          .eq('tenant_id', currentTenantId)
-          .limit(1)
-          .maybeSingle();
-        if (firstRow?.schedule && typeof firstRow.schedule === 'object' && !Array.isArray(firstRow.schedule)) {
-          businessSchedule = firstRow.schedule as BusinessSchedule;
-        }
-      }
-      const now = new Date();
-      const todayStart = startOfDay(now);
-      const nextWorkingDay = getNextWorkingDay(now, businessSchedule);
-      const nextWorkingDayStart = startOfDay(nextWorkingDay);
-      const nextWorkingDayEnd = addDays(nextWorkingDayStart, 1);
-      setNextWorkingDayLabel(`${DAY_LABELS[nextWorkingDay.getDay()]} ${format(nextWorkingDay, 'd. MMM')}`);
-
-      // Planning: who is on shift now, today's slots, next working day's slots
-      const rangeEnd = addDays(nextWorkingDayStart, 1);
-      const { data: planningRows } = await supabase
-        .from('planning_slots')
-        .select('id, team_member_id, start_at, end_at, team_member:team_members(id, name, email)')
-        .eq('tenant_id', currentTenantId)
-        .lt('start_at', rangeEnd.toISOString())
-        .gte('end_at', todayStart.toISOString());
-      const allSlots = (planningRows ?? []) as unknown as PlanningSlotOnDashboard[];
-      const nowTime = now.getTime();
-      const tomorrowStart = addDays(todayStart, 1);
-      setPlanningSlotsNow(
-        allSlots.filter((s) => {
-          const start = new Date(s.start_at).getTime();
-          const end = new Date(s.end_at).getTime();
-          return start <= nowTime && end > nowTime;
-        })
-      );
-      setPlanningSlotsToday(allSlots.filter((s) => isBefore(new Date(s.start_at), tomorrowStart)));
-      setPlanningSlotsNextWorkingDay(
-        allSlots.filter(
-          (s) =>
-            !isBefore(new Date(s.start_at), nextWorkingDayStart) && isBefore(new Date(s.start_at), nextWorkingDayEnd)
-        )
-      );
-
-      setLoading(false);
-    }
-    loadRef.current = load;
-    load();
-  }, [user?.id, statuses, currentTenantId]);
-
-  // Refetch when user returns to the tab so dashboard reflects current data
-  useEffect(() => {
-    const onVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && currentTenantId) {
-        loadRef.current?.();
-      }
-    };
-    document.addEventListener('visibilitychange', onVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [currentTenantId]);
 
   const statusDisplayConfig: Record<AvailabilityStatus, { Icon: typeof Check }> = {
     active: { Icon: Check },
@@ -443,6 +200,13 @@ export function DashboardPage() {
   const monthMax = Math.max(1, ...monthTrend.flatMap((d) => [d.opened, d.closed]));
 
   const displayName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Bruker';
+
+  const dashboardSubtitle =
+    role === 'admin'
+      ? 'Oversikt over organisasjonen og support'
+      : role === 'manager'
+        ? 'Oversikt over teamet og saker'
+        : 'Oversikt over dine saker og supportvakt';
 
   if (loading) {
     return (
@@ -461,42 +225,76 @@ export function DashboardPage() {
             Hei, {displayName}
           </h1>
           <p className="text-sm text-[var(--hiver-text-muted)] mt-1">
-            Her er oversikten over support-helpdesken
+            {dashboardSubtitle}
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-4">
-          <Link
-            to="/tickets?view=mine&new=1"
-            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] shadow-sm transition-colors shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            Ny sak
-          </Link>
+        <div className="flex flex-wrap items-center gap-3">
+          {showAnalytics && (
+            <Link
+              to="/analytics"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-[var(--hiver-border)] text-[var(--hiver-text)] text-sm font-medium hover:bg-[var(--hiver-bg)] transition-colors shrink-0"
+            >
+              <BarChart3 className="w-4 h-4" />
+              Se analyse
+            </Link>
+          )}
+          {showAdminLinks && (
+            <Link
+              to="/settings"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-[var(--hiver-border)] text-[var(--hiver-text)] text-sm font-medium hover:bg-[var(--hiver-bg)] transition-colors shrink-0"
+            >
+              Innstillinger
+            </Link>
+          )}
+          {canReplyToTickets(role) && (
+            <Link
+              to="/tickets?view=mine&new=1"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] shadow-sm transition-colors shrink-0"
+            >
+              <Plus className="w-4 h-4" />
+              Ny sak
+            </Link>
+          )}
         </div>
       </div>
 
-      {/* Planning overview: on shift now + next working day */}
-      <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm mb-6 lg:mb-8">
-        <div className="p-5 lg:p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <CalendarClock className="w-5 h-5 text-[var(--hiver-accent)]" />
-            <h2 className="text-base font-semibold text-[var(--hiver-text)]">Supportvakt og timeplan</h2>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* On shift now + their schedule today */}
-            <div>
-              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider mb-2">På vakt nå</p>
+      {/* Agent callout: prompt to pick up unassigned tickets */}
+      {role === 'agent' && unassigned > 0 && (
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 p-4 rounded-2xl bg-[var(--hiver-accent-light)] border border-[var(--hiver-accent)]/30 mb-6 lg:mb-8">
+          <p className="text-sm text-[var(--hiver-text)]">
+            <span className="font-semibold">{unassigned} ufordelte sak{unassigned !== 1 ? 'er' : ''}</span>
+            {' – ta en?'}
+          </p>
+          <Link
+            to="/tickets?view=unassigned"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] shrink-0"
+          >
+            Se ufordelte
+            <ArrowRight className="w-4 h-4" />
+          </Link>
+        </div>
+      )}
+
+      {/* Planning: two cards (På vakt nå | Neste arbeidsdag) + approval card for my pending slots */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-5 mb-6 lg:mb-8">
+        {/* Card 1: På vakt nå */}
+        <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          <div className="p-5 lg:p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <CalendarClock className="w-5 h-5 text-[var(--hiver-accent)]" />
+              <h2 className="text-base font-semibold text-[var(--hiver-text)]">På vakt nå</h2>
+            </div>
               {planningSlotsNow.length === 0 ? (
                 <p className="text-sm text-[var(--hiver-text-muted)]">Ingen er planlagt på vakt akkurat nå.</p>
               ) : (
                 <ul className="space-y-1.5">
                   {planningSlotsNow.map((slot) => {
                     const member = teamMembers.find((m) => m.id === slot.team_member_id);
-                    const status = member ? getDisplayStatus(member) : 'active';
+                    const status = (member ? getDisplayStatus(member) : 'active') as AvailabilityStatus;
                     const todayForPerson = planningSlotsToday
                       .filter((s) => s.team_member_id === slot.team_member_id)
                       .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime());
-                    const name = (slot.team_member as { name?: string })?.name ?? 'Ukjent';
+                    const name = teamMembers.find((m) => m.id === slot.team_member_id)?.name ?? 'Ukjent';
                     const timeplanStr =
                       todayForPerson.length > 0
                         ? todayForPerson
@@ -523,12 +321,8 @@ export function DashboardPage() {
                         </span>
                         {timeplanStr && (
                           <>
-                            <span className="shrink-0 text-[var(--hiver-text-muted)]" aria-hidden>
-                              ·
-                            </span>
-                            <span className="text-[var(--hiver-text-muted)] tabular-nums truncate">
-                              {timeplanStr}
-                            </span>
+                            <span className="shrink-0 text-[var(--hiver-text-muted)]" aria-hidden>·</span>
+                            <span className="text-[var(--hiver-text-muted)] tabular-nums truncate">{timeplanStr}</span>
                           </>
                         )}
                       </li>
@@ -536,17 +330,21 @@ export function DashboardPage() {
                   })}
                 </ul>
               )}
+          </div>
+        </div>
+
+        {/* Card 2: Neste arbeidsdag + Ledige tidsrom */}
+        <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          <div className="p-5 lg:p-6">
+            <div className="flex items-center gap-2 mb-4">
+              <CalendarClock className="w-5 h-5 text-[var(--hiver-accent)]" />
+              <h2 className="text-base font-semibold text-[var(--hiver-text)]">Neste arbeidsdag</h2>
             </div>
-            {/* Next working day */}
-            <div>
+            {nextWorkingDayLabel && (
               <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider mb-2">
-                Neste arbeidsdag
-                {nextWorkingDayLabel && (
-                  <span className="font-normal normal-case ml-1.5 text-[var(--hiver-text-muted)]">
-                    ({nextWorkingDayLabel})
-                  </span>
-                )}
+                {nextWorkingDayLabel}
               </p>
+            )}
               {planningSlotsNextWorkingDay.length === 0 ? (
                 <p className="text-sm text-[var(--hiver-text-muted)]">Ingen planlagte vakter den dagen.</p>
               ) : (
@@ -554,22 +352,219 @@ export function DashboardPage() {
                   {planningSlotsNextWorkingDay
                     .sort((a, b) => new Date(a.start_at).getTime() - new Date(b.start_at).getTime())
                     .map((slot) => {
-                      const name = (slot.team_member as { name?: string })?.name ?? 'Ukjent';
+                      const member = teamMembers.find((m) => m.id === slot.team_member_id);
+                      const name = member?.name ?? 'Ukjent';
+                      const statusLabel = slot.status === 'approved' ? 'Godkjent' : slot.status === 'rejected' ? 'Avvist' : 'Venter';
+                      const statusColor = slot.status === 'approved' ? 'text-green-600' : slot.status === 'rejected' ? 'text-red-600' : 'text-amber-600';
+                      const canSendReminder = slot.status === 'pending' && member?.user_id && currentTenantId;
                       return (
-                        <li key={slot.id} className="text-sm text-[var(--hiver-text)] flex items-center gap-2">
+                        <li key={slot.id} className="text-sm text-[var(--hiver-text)] flex items-center gap-2 flex-wrap">
                           <span className="text-[var(--hiver-text-muted)] tabular-nums shrink-0">
                             {format(new Date(slot.start_at), 'HH:mm')}–{format(new Date(slot.end_at), 'HH:mm')}
                           </span>
                           <span>{name}</span>
+                          <span className={`text-xs font-medium shrink-0 ${statusColor}`}>{statusLabel}</span>
+                          {canSendReminder && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!member?.user_id || !currentTenantId) return;
+                                await supabase.from('notifications').insert({
+                                  user_id: member.user_id,
+                                  tenant_id: currentTenantId,
+                                  title: 'Påminnelse: godkjenn eller avvis vakt',
+                                  body: `${nextWorkingDayLabel}: ${format(new Date(slot.start_at), 'HH:mm')}–${format(new Date(slot.end_at), 'HH:mm')}. Gå til planlegging for å godkjenne eller avvise.`,
+                                  link: '/planning',
+                                });
+                              }}
+                              className="shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium text-[var(--hiver-accent)] hover:bg-[var(--hiver-accent)]/15"
+                              title="Send påminnelse til brukeren"
+                            >
+                              <Bell className="w-3 h-3" />
+                              Påminnelse
+                            </button>
+                          )}
                         </li>
                       );
                     })}
                 </ul>
               )}
-            </div>
+            {showTeamStatus && emptySlotsNextWorkingDay.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-[var(--hiver-border)]">
+                <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider mb-1.5">
+                  Ledige tidsrom
+                </p>
+                <p className="text-sm text-[var(--hiver-text-muted)]">{emptySlotsNextWorkingDay.join(', ')}</p>
+              </div>
+            )}
           </div>
         </div>
+
+        {/* Card 3: Assigned slots not yet approved or rejected */}
+        {canApproveRejectSlots && (
+          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+            <div className="p-5 lg:p-6">
+              <div className="flex items-center gap-2 mb-2">
+                <Check className="w-5 h-5 text-[var(--hiver-accent)]" />
+                <h2 className="text-base font-semibold text-[var(--hiver-text)]">Vakter som venter på godkjenning</h2>
+              </div>
+              <p className="text-xs text-[var(--hiver-text-muted)] mb-4">
+                Vakter som er lagt inn til deg og som ikke er godkjent eller avvist ennå.
+              </p>
+              {myPendingSlots.length === 0 ? (
+                <p className="text-sm text-[var(--hiver-text-muted)]">Ingen vakter venter på at du godkjenner eller avviser.</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        for (const slot of myPendingSlots) {
+                          await supabase.from('planning_slots').update({ status: 'approved' }).eq('id', slot.id);
+                        }
+                        refetch();
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-green-600 text-white hover:bg-green-700"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      Godkjenn alle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (!window.confirm(`Avvise alle ${myPendingSlots.length} vakt(er)?`)) return;
+                        for (const slot of myPendingSlots) {
+                          await supabase.from('planning_slots').update({ status: 'rejected' }).eq('id', slot.id);
+                        }
+                        refetch();
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-600/90 text-white hover:bg-red-700"
+                    >
+                      <Ban className="w-3.5 h-3.5" />
+                      Avvis alle
+                    </button>
+                  </div>
+                  <ul className="space-y-2">
+                  {myPendingSlots.map((slot) => (
+                    <li
+                      key={slot.id}
+                      className="flex flex-wrap items-center justify-between gap-2 py-2 border-b border-[var(--hiver-border)] last:border-0"
+                    >
+                      <span className="text-sm text-[var(--hiver-text)]">
+                        <span className="font-medium tabular-nums">
+                          {format(new Date(slot.start_at), 'HH:mm')}–{format(new Date(slot.end_at), 'HH:mm')}
+                        </span>
+                        <span className="text-[var(--hiver-text-muted)] ml-1.5">
+                          {format(new Date(slot.start_at), 'd. MMM')}
+                        </span>
+                      </span>
+                      <div className="flex gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await supabase.from('planning_slots').update({ status: 'approved' }).eq('id', slot.id);
+                            refetch();
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-green-600 text-white hover:bg-green-700"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          Godkjenn
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            await supabase.from('planning_slots').update({ status: 'rejected' }).eq('id', slot.id);
+                            refetch();
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-600/90 text-white hover:bg-red-700"
+                        >
+                          <Ban className="w-3.5 h-3.5" />
+                          Avvis
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                </>
+              )}
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Admin/manager: pending slot applications from team (this + next week) */}
+      {canManagePlanningSlots(role) && pendingSlotsFromTeam.length > 0 && (
+        <div className="mb-6 lg:mb-8 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          <div className="p-5 lg:p-6">
+            <div className="flex items-center justify-between gap-4 mb-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Clock className="w-5 h-5 text-[var(--hiver-accent)]" />
+                <h2 className="text-base font-semibold text-[var(--hiver-text)]">Søknader om vakt</h2>
+              </div>
+              <Link
+                to="/planning"
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-[var(--hiver-accent)] hover:underline"
+              >
+                Gå til planlegging
+                <ArrowRight className="w-4 h-4" />
+              </Link>
+            </div>
+            <p className="text-xs text-[var(--hiver-text-muted)] mb-4">
+              Teammedlemmer har søkt om vakt og venter på å godkjenne eller avvise. Du finner dem i listen på planleggingssiden.
+            </p>
+            <ul className="space-y-2">
+              {pendingSlotsFromTeam.map((slot) => {
+                const name = teamMembers.find((m) => m.id === slot.team_member_id)?.name ?? 'Ukjent';
+                return (
+                  <li
+                    key={slot.id}
+                    className="flex flex-wrap items-center justify-between gap-2 py-2 border-b border-[var(--hiver-border)] last:border-0"
+                  >
+                    <span className="text-sm text-[var(--hiver-text)]">
+                      <span className="font-medium">{name}</span>
+                      <span className="text-[var(--hiver-text-muted)] ml-1.5 tabular-nums">
+                        {format(new Date(slot.start_at), 'd. MMM HH:mm')}–{format(new Date(slot.end_at), 'HH:mm')}
+                      </span>
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await supabase.from('planning_slots').update({ status: 'approved' }).eq('id', slot.id);
+                          refetch();
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-green-600 text-white hover:bg-green-700"
+                        title="Godkjenn"
+                      >
+                        <Check className="w-3.5 h-3.5" />
+                        Godkjenn
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          await supabase.from('planning_slots').update({ status: 'rejected' }).eq('id', slot.id);
+                          refetch();
+                        }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-600/90 text-white hover:bg-red-700"
+                        title="Avvis"
+                      >
+                        <Ban className="w-3.5 h-3.5" />
+                        Avvis
+                      </button>
+                      <Link
+                        to="/planning"
+                        className="text-xs font-medium text-[var(--hiver-accent)] hover:underline ml-1"
+                      >
+                        Planlegging
+                      </Link>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </div>
+      )}
 
       {/* Bento grid: infographic + week chart, trendline, then Recent + Team. */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-5 lg:grid-rows-[auto_auto_1fr]">
@@ -623,31 +618,33 @@ export function DashboardPage() {
           </div>
         </div>
 
-        {/* Last 30 days: opened vs closed trendline (full width) */}
-        <div className="lg:col-span-4 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
-          <div className="p-5 lg:p-6 flex flex-col">
-            <div className="flex items-center gap-2 mb-4">
-              <TrendingUp className="w-5 h-5 text-[var(--hiver-accent)]" />
-              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider">
-                Saker siste 30 dager (åpnet og lukket)
-              </p>
-            </div>
-            <MonthTrendlineChart data={monthTrend} yMax={monthMax} />
-            <div className="flex items-center gap-6 mt-3 pt-3 border-t border-[var(--hiver-border)]">
-              <span className="inline-flex items-center gap-1.5 text-xs text-[var(--hiver-text-muted)]">
-                <span className="w-3 h-0.5 rounded-full shrink-0" style={{ backgroundColor: 'var(--hiver-accent)' }} aria-hidden />
-                Åpnet
-              </span>
-              <span className="inline-flex items-center gap-1.5 text-xs text-[var(--hiver-text-muted)]">
-                <span className="w-3 h-0.5 rounded-full bg-emerald-500" aria-hidden />
-                Lukket
-              </span>
+        {/* Last 30 days: opened vs closed trendline (manager + admin only) */}
+        {showAnalytics && (
+          <div className="lg:col-span-4 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+            <div className="p-5 lg:p-6 flex flex-col">
+              <div className="flex items-center gap-2 mb-4">
+                <TrendingUp className="w-5 h-5 text-[var(--hiver-accent)]" />
+                <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider">
+                  Saker siste 30 dager (åpnet og lukket)
+                </p>
+              </div>
+              <MonthTrendlineChart data={monthTrend} yMax={monthMax} />
+              <div className="flex items-center gap-6 mt-3 pt-3 border-t border-[var(--hiver-border)]">
+                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--hiver-text-muted)]">
+                  <span className="w-3 h-0.5 rounded-full shrink-0" style={{ backgroundColor: 'var(--hiver-accent)' }} aria-hidden />
+                  Åpnet
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--hiver-text-muted)]">
+                  <span className="w-3 h-0.5 rounded-full bg-emerald-500" aria-hidden />
+                  Lukket
+                </span>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Bento: Recent tickets with tabs Mine / Ufordelte (full width when Brukere hidden) */}
-        <div className={`md:col-span-2 lg:row-span-2 lg:row-start-3 flex flex-col min-h-[280px] lg:min-h-0 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm ${showTeamStatus ? 'lg:col-span-2' : 'lg:col-span-4'}`}>
+        <div className={`md:col-span-2 lg:row-span-2 flex flex-col min-h-[280px] lg:min-h-0 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm ${showTeamStatus ? 'lg:col-span-2' : 'lg:col-span-4'} ${showAnalytics ? 'lg:row-start-3' : 'lg:row-start-2'}`}>
           <div className="flex items-center justify-between px-5 lg:px-6 py-3 border-b border-[var(--hiver-border)] shrink-0">
             <div className="flex items-center gap-2">
               <Ticket className="w-5 h-5 text-[var(--hiver-accent)]" />
@@ -726,7 +723,7 @@ export function DashboardPage() {
 
         {/* Bento: Team status (admin + manager only) */}
         {showTeamStatus && (
-          <div className="md:col-span-2 lg:col-span-2 lg:row-span-2 lg:row-start-3 flex flex-col min-h-[280px] lg:min-h-0 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          <div className={`md:col-span-2 lg:col-span-2 lg:row-span-2 flex flex-col min-h-[280px] lg:min-h-0 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm ${showAnalytics ? 'lg:row-start-3' : 'lg:row-start-2'}`}>
             <div className="flex items-center gap-2 px-5 lg:px-6 py-4 border-b border-[var(--hiver-border)] shrink-0">
               <Users className="w-5 h-5 text-[var(--hiver-text-muted)]" />
               <h2 className="text-base font-semibold text-[var(--hiver-text)]">Brukere</h2>
@@ -739,7 +736,7 @@ export function DashboardPage() {
               ) : (
                 <ul className="divide-y divide-[var(--hiver-border)]">
                   {teamMembers.map((m) => {
-                    const status = getDisplayStatus(m);
+                    const status = getDisplayStatus(m) as AvailabilityStatus;
                     const label = AVAILABILITY_LABELS[status];
                     const { Icon } = statusDisplayConfig[status];
                     return (

@@ -41,6 +41,7 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
   const { currentTenantId } = useTenant();
   const toast = useToast();
   const [gmailSync, setGmailSync] = useState<GmailSyncRow | null>(null);
+  const [cronLastRunAt, setCronLastRunAt] = useState<string | null>(null);
   const [tenantOAuthClientId, setTenantOAuthClientId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
@@ -71,17 +72,29 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user || !currentTenantId) {
       setGmailSync(null);
+      setCronLastRunAt(null);
       setLoading(false);
       return;
     }
-    const { data } = await supabase
-      .from('gmail_sync')
-      .select('id, user_id, email_address, group_email, is_active, last_sync_at, created_at, updated_at')
-      .eq('user_id', user.id)
-      .eq('tenant_id', currentTenantId)
-      .eq('is_active', true)
-      .maybeSingle();
-    setGmailSync((data as GmailSyncRow | null) ?? null);
+    const [gmailRes, cronRes] = await Promise.all([
+      supabase
+        .from('gmail_sync')
+        .select('id, user_id, email_address, group_email, is_active, last_sync_at, created_at, updated_at')
+        .eq('user_id', user.id)
+        .eq('tenant_id', currentTenantId)
+        .eq('is_active', true)
+        .maybeSingle(),
+      supabase
+        .from('gmail_sync_cron_last_run')
+        .select('last_run_at')
+        .eq('id', 1)
+        .maybeSingle(),
+    ]);
+    const gmailData = gmailRes.data as GmailSyncRow | null;
+    const cronRow = cronRes.data as { last_run_at?: string } | null;
+    const cronLastRunAt = cronRow?.last_run_at ?? null;
+    setGmailSync(gmailData ?? null);
+    setCronLastRunAt(cronLastRunAt);
     setLoading(false);
   }, [currentTenantId]);
 
@@ -180,11 +193,20 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     setSavingGroupEmail(false);
   };
 
+  // Display last sync = latest of automatic (cron) or manual (this inbox). Manual overwrites.
+  const inboxLastSync = gmailSync?.last_sync_at ?? null;
+  const lastSyncAt =
+    inboxLastSync && cronLastRunAt
+      ? new Date(inboxLastSync) > new Date(cronLastRunAt)
+        ? inboxLastSync
+        : cronLastRunAt
+      : inboxLastSync ?? cronLastRunAt;
+
   const value: GmailContextValue = {
     isConnected: !!gmailSync,
     gmailEmail: gmailSync?.email_address ?? null,
     groupEmail: gmailSync?.group_email ?? null,
-    lastSyncAt: gmailSync?.last_sync_at ?? null,
+    lastSyncAt,
     loading,
     syncing,
     savingGroupEmail,

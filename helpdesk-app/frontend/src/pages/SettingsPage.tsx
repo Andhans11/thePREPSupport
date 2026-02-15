@@ -8,6 +8,7 @@ import { TemplatesSettings } from '../components/settings/TemplatesSettings';
 import { BusinessHoursSettings } from '../components/settings/BusinessHoursSettings';
 import { SignaturesSettings } from '../components/settings/SignaturesSettings';
 import { MasterDataSettings } from '../components/settings/MasterDataSettings';
+import { TimeRegistrationSettings } from '../components/settings/TimeRegistrationSettings';
 import { canAccessSettings } from '../types/roles';
 import { Navigate } from 'react-router-dom';
 
@@ -44,6 +45,7 @@ export function SettingsPage() {
         {tab === 'business_hours' && <BusinessHoursSettings />}
         {tab === 'signatures' && <SignaturesSettings />}
         {tab === 'master_data' && <MasterDataSettings />}
+        {tab === 'time_registration' && <TimeRegistrationSettings />}
       </SettingsTabs>
     </div>
   );

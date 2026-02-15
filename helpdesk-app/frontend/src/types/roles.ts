@@ -36,6 +36,11 @@ export function canSeeTeamStatusDashboard(role: Role | null | undefined): boolea
   return role === 'admin' || role === 'manager';
 }
 
+/** Admin and manager can access the Analyse (analytics) page. */
+export function canAccessAnalytics(role: Role | null | undefined): boolean {
+  return role === 'admin' || role === 'manager';
+}
+
 /** Admin and viewer can open Settings; agents have no access. Company tab for both; Users/Templates etc. admin only. */
 export function canAccessSettings(role: Role | null | undefined): boolean {
   return role === 'admin' || role === 'viewer';
@@ -55,4 +60,26 @@ export function canManageTemplates(role: Role | null | undefined): boolean {
 
 export function canReplyToTickets(role: Role | null | undefined): boolean {
   return role === 'admin' || role === 'agent';
+}
+
+/** Admin and manager can add/edit/delete planning slots and see all slots; agents see only their own and can approve/reject. */
+export function canManagePlanningSlots(role: Role | null | undefined): boolean {
+  if (role == null) return false;
+  const r = role.toLowerCase();
+  return r === 'admin' || r === 'manager';
+}
+
+/** Agents can approve or reject their own planning slots (no add/edit/delete). */
+export function canApproveRejectOwnSlots(role: Role | null | undefined): boolean {
+  return role === 'agent' || role === 'admin' || role === 'manager';
+}
+
+/** All team members can access time registration (timeregistrering). */
+export function canAccessTimeRegistration(role: Role | null | undefined): boolean {
+  return role != null;
+}
+
+/** Admin and manager can approve time entries; approvers list is also checked in the app. */
+export function canApproveTimeRegistration(role: Role | null | undefined): boolean {
+  return role === 'admin' || role === 'manager';
 }

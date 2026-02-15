@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../services/supabase';
 import { useTenant } from '../contexts/TenantContext';
@@ -14,6 +14,8 @@ import {
   MessageCircle,
   Target,
   Filter,
+  Lightbulb,
+  X,
 } from 'lucide-react';
 import type { TicketPriority } from '../types/database';
 
@@ -81,10 +83,11 @@ function TrendChart({
       : Array.from({ length: n }, (_, i) => i);
 
   return (
-    <div className="w-full flex justify-center">
+    <div className="w-full min-w-0 overflow-x-auto overflow-y-hidden flex justify-center">
       <svg
         viewBox={`0 0 ${width} ${CHART_HEIGHT}`}
-        className="w-full max-w-full h-[300px]"
+        className="w-full max-w-full h-[200px] sm:h-[260px] min-h-[180px] flex-shrink-0"
+        style={{ minWidth: Math.min(width, 320) }}
         preserveAspectRatio="xMidYMid meet"
         aria-label="Saker åpnet og lukket per dag"
       >
@@ -190,6 +193,7 @@ export function AnalyticsPage() {
   const [filterPriority, setFilterPriority] = useState<TicketPriority[]>([]);
   const [filterCategory, setFilterCategory] = useState<string[]>([]);
   const [filterTeamId, setFilterTeamId] = useState<string | null>(null);
+  const [filterUnassignedOnly, setFilterUnassignedOnly] = useState(false);
   const [sortBreakdown, setSortBreakdown] = useState<'valueDesc' | 'valueAsc' | 'label'>('valueDesc');
   const [showFilters, setShowFilters] = useState(false);
 
@@ -216,6 +220,7 @@ export function AnalyticsPage() {
           'id, status, priority, category, team_id, assigned_to, created_at, resolved_at, first_response_at, team:teams(id, name)'
         )
         .eq('tenant_id', currentTenantId)
+        .neq('status', 'archived')
         .order('created_at', { ascending: false });
 
       if (rangeStart) {
@@ -241,8 +246,9 @@ export function AnalyticsPage() {
     if (filterPriority.length) list = list.filter((t) => filterPriority.includes(t.priority));
     if (filterCategory.length) list = list.filter((t) => t.category && filterCategory.includes(t.category));
     if (filterTeamId) list = list.filter((t) => t.team_id === filterTeamId);
+    if (filterUnassignedOnly) list = list.filter((t) => !t.assigned_to);
     return list;
-  }, [tickets, filterStatus, filterPriority, filterCategory, filterTeamId]);
+  }, [tickets, filterStatus, filterPriority, filterCategory, filterTeamId, filterUnassignedOnly]);
 
   const stats = useMemo(() => {
     const total = filtered.length;
@@ -394,18 +400,19 @@ export function AnalyticsPage() {
   const funnelMax = Math.max(...funnelSteps.map((s) => s.value), 1);
 
   const hasActiveFilters =
-    filterStatus.length > 0 || filterPriority.length > 0 || filterCategory.length > 0 || filterTeamId != null;
+    filterStatus.length > 0 || filterPriority.length > 0 || filterCategory.length > 0 || filterTeamId != null || filterUnassignedOnly;
 
   const clearFilters = () => {
     setFilterStatus([]);
     setFilterPriority([]);
     setFilterCategory([]);
     setFilterTeamId(null);
+    setFilterUnassignedOnly(false);
   };
 
   return (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6">
+    <div className="w-full min-w-0 overflow-x-hidden p-4 sm:p-6 max-w-6xl mx-auto box-border">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 min-w-0">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <BarChart3 className="w-6 h-6 text-[var(--hiver-accent)]" />
@@ -424,63 +431,118 @@ export function AnalyticsPage() {
         </Link>
       </div>
 
-      {/* Filters */}
-      <div className="card-panel p-4 mb-6">
-        <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-[var(--hiver-text-muted)]">Periode:</span>
-            <select
-              value={dateRange}
-              onChange={(e) => setDateRange(e.target.value as DateRangeKey)}
-              className="rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text)] text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]"
-            >
-              <option value="7d">Siste 7 dager</option>
-              <option value="30d">Siste 30 dager</option>
-              <option value="90d">Siste 90 dager</option>
-              <option value="all">Alt</option>
-            </select>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowFilters((s) => !s)}
-            className={`inline-flex items-center gap-2 text-sm px-3 py-2 rounded-lg border transition-colors ${
-              showFilters || hasActiveFilters
-                ? 'border-[var(--hiver-accent)] bg-[var(--hiver-accent-light)] text-[var(--hiver-accent)]'
-                : 'border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
-            }`}
-          >
-            <Filter className="w-4 h-4" />
-            Filtrer
-            {hasActiveFilters && (
-              <span className="bg-[var(--hiver-accent)] text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
-                !
-              </span>
-            )}
-          </button>
-          {hasActiveFilters && (
+      {/* Filters & sort */}
+      <div className="card-panel p-4 mb-6 overflow-hidden">
+        <div className="flex flex-col gap-4 min-w-0">
+          <div className="flex flex-wrap items-center gap-3 sm:gap-4">
+            <div className="flex items-center gap-2 shrink-0">
+              <span className="text-sm text-[var(--hiver-text-muted)]">Periode:</span>
+              <select
+                value={dateRange}
+                onChange={(e) => setDateRange(e.target.value as DateRangeKey)}
+                className="rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text)] text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)] min-w-0"
+              >
+                <option value="7d">Siste 7 dager</option>
+                <option value="30d">Siste 30 dager</option>
+                <option value="90d">Siste 90 dager</option>
+                <option value="all">Alt</option>
+              </select>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm text-[var(--hiver-text-muted)] shrink-0">Hurtigfilter:</span>
+              <button
+                type="button"
+                onClick={() => {
+                  const openCodes = statuses.filter((s) => ['new', 'open', 'pending'].includes(s.code)).map((s) => s.code);
+                  setFilterStatus((prev) => (prev.length === 0 || !openCodes.every((c) => prev.includes(c)) ? openCodes : []));
+                  setFilterPriority([]);
+                  setFilterCategory([]);
+                  setFilterTeamId(null);
+                  setShowFilters(true);
+                }}
+                className={`text-xs sm:text-sm px-2.5 py-1.5 rounded-lg border transition-colors shrink-0 ${
+                  filterStatus.length > 0 && statuses.filter((s) => ['new', 'open', 'pending'].includes(s.code)).every((s) => filterStatus.includes(s.code))
+                    ? 'border-[var(--hiver-accent)] bg-[var(--hiver-accent-light)] text-[var(--hiver-accent)]'
+                    : 'border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+                }`}
+              >
+                Åpne
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const highUrgent: TicketPriority[] = ['high', 'urgent'];
+                  setFilterPriority((prev) =>
+                    prev.length === 0 || !highUrgent.every((p) => prev.includes(p)) ? highUrgent : []
+                  );
+                  setShowFilters(true);
+                }}
+                className={`text-xs sm:text-sm px-2.5 py-1.5 rounded-lg border transition-colors shrink-0 ${
+                  filterPriority.length > 0 && filterPriority.includes('high') && filterPriority.includes('urgent')
+                    ? 'border-[var(--hiver-accent)] bg-[var(--hiver-accent-light)] text-[var(--hiver-accent)]'
+                    : 'border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+                }`}
+              >
+                Høy prioritet
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setFilterUnassignedOnly((prev) => !prev);
+                  setShowFilters(true);
+                }}
+                className={`text-xs sm:text-sm px-2.5 py-1.5 rounded-lg border transition-colors shrink-0 ${
+                  filterUnassignedOnly
+                    ? 'border-[var(--hiver-accent)] bg-[var(--hiver-accent-light)] text-[var(--hiver-accent)]'
+                    : 'border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+                }`}
+              >
+                Ufordelte
+              </button>
+            </div>
             <button
               type="button"
-              onClick={clearFilters}
-              className="text-sm text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)] underline"
+              onClick={() => setShowFilters((s) => !s)}
+              className={`inline-flex items-center gap-2 text-sm px-3 py-2 rounded-lg border transition-colors shrink-0 ${
+                showFilters || hasActiveFilters
+                  ? 'border-[var(--hiver-accent)] bg-[var(--hiver-accent-light)] text-[var(--hiver-accent)]'
+                  : 'border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+              }`}
             >
-              Nullstill filtre
+              <Filter className="w-4 h-4" />
+              Flere filtre
+              {hasActiveFilters && (
+                <span className="bg-[var(--hiver-accent)] text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">
+                  !
+                </span>
+              )}
             </button>
-          )}
-          <div className="flex items-center gap-2 ml-auto">
-            <span className="text-sm text-[var(--hiver-text-muted)]">Sorter diagram:</span>
-            <select
-              value={sortBreakdown}
-              onChange={(e) => setSortBreakdown(e.target.value as 'valueDesc' | 'valueAsc' | 'label')}
-              className="rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text)] text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]"
-            >
-              <option value="valueDesc">Verdi (høy–lav)</option>
-              <option value="valueAsc">Verdi (lav–høy)</option>
-              <option value="label">Navn A–Å</option>
-            </select>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="text-sm text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)] underline shrink-0 inline-flex items-center gap-1"
+              >
+                <X className="w-3.5 h-3.5" />
+                Nullstill
+              </button>
+            )}
+            <div className="flex items-center gap-2 ml-auto shrink-0">
+              <span className="text-sm text-[var(--hiver-text-muted)] hidden sm:inline">Sorter alle diagram:</span>
+              <select
+                value={sortBreakdown}
+                onChange={(e) => setSortBreakdown(e.target.value as 'valueDesc' | 'valueAsc' | 'label')}
+                className="rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] text-[var(--hiver-text)] text-sm px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)] min-w-0"
+              >
+                <option value="valueDesc">Verdi (høy→lav)</option>
+                <option value="valueAsc">Verdi (lav→høy)</option>
+                <option value="label">Navn A–Å</option>
+              </select>
+            </div>
           </div>
         </div>
         {showFilters && (
-          <div className="mt-4 pt-4 border-t border-[var(--hiver-border)] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="mt-4 pt-4 border-t border-[var(--hiver-border)] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 min-w-0">
             <div>
               <label className="block text-xs font-medium text-[var(--hiver-text-muted)] mb-2">Status</label>
               <div className="flex flex-wrap gap-2">
@@ -566,87 +628,141 @@ export function AnalyticsPage() {
       {loading ? (
         <div className="text-[var(--hiver-text-muted)] text-sm py-12">Laster analyse…</div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-8 min-w-0">
           {/* Stat cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4">
-            <div className="card-panel p-5 flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-[var(--hiver-accent-light)] flex items-center justify-center shrink-0">
-                <Inbox className="w-6 h-6 text-[var(--hiver-accent)]" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-7 gap-3 sm:gap-4">
+            <div className="card-panel p-4 sm:p-5 flex items-center gap-3 sm:gap-4 min-w-0 overflow-hidden">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-[var(--hiver-accent-light)] flex items-center justify-center shrink-0">
+                <Inbox className="w-5 h-5 sm:w-6 sm:h-6 text-[var(--hiver-accent)]" />
               </div>
-              <div className="min-w-0">
-                <p className="text-sm text-[var(--hiver-text-muted)]">Totalt saker</p>
-                <p className="text-2xl font-semibold text-[var(--hiver-text)] tabular-nums">{stats.total}</p>
-              </div>
-            </div>
-            <div className="card-panel p-5 flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-[var(--hiver-accent-light)] flex items-center justify-center shrink-0">
-                <TrendingUp className="w-6 h-6 text-[var(--hiver-accent)]" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm text-[var(--hiver-text-muted)]">Løsningsrate</p>
-                <p className="text-2xl font-semibold text-[var(--hiver-text)] tabular-nums">{stats.resolutionRate}%</p>
+              <div className="min-w-0 overflow-hidden">
+                <p className="text-xs sm:text-sm text-[var(--hiver-text-muted)] truncate">Totalt saker</p>
+                <p className="text-xl sm:text-2xl font-semibold text-[var(--hiver-text)] tabular-nums truncate">{stats.total}</p>
               </div>
             </div>
-            <div className="card-panel p-5 flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0">
-                <AlertCircle className="w-6 h-6 text-amber-600" />
+            <div className="card-panel p-4 sm:p-5 flex items-center gap-3 sm:gap-4 min-w-0 overflow-hidden">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-[var(--hiver-accent-light)] flex items-center justify-center shrink-0">
+                <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-[var(--hiver-accent)]" />
               </div>
-              <div className="min-w-0">
-                <p className="text-sm text-[var(--hiver-text-muted)]">Åpne / venter</p>
-                <p className="text-2xl font-semibold text-[var(--hiver-text)] tabular-nums">{stats.openCount}</p>
-              </div>
-            </div>
-            <div className="card-panel p-5 flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-rose-500/15 flex items-center justify-center shrink-0">
-                <UserX className="w-6 h-6 text-rose-600" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-sm text-[var(--hiver-text-muted)]">Ufordelte</p>
-                <p className="text-2xl font-semibold text-[var(--hiver-text)] tabular-nums">{stats.unassignedCount}</p>
+              <div className="min-w-0 overflow-hidden">
+                <p className="text-xs sm:text-sm text-[var(--hiver-text-muted)] truncate">Løsningsrate</p>
+                <p className="text-xl sm:text-2xl font-semibold text-[var(--hiver-text)] tabular-nums truncate">{stats.resolutionRate}%</p>
               </div>
             </div>
-            <div className="card-panel p-5 flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-emerald-500/15 flex items-center justify-center shrink-0">
-                <MessageCircle className="w-6 h-6 text-emerald-600" />
+            <div className="card-panel p-4 sm:p-5 flex items-center gap-3 sm:gap-4 min-w-0 overflow-hidden">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-amber-500/15 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 sm:w-6 sm:h-6 text-amber-600" />
               </div>
-              <div className="min-w-0">
-                <p className="text-sm text-[var(--hiver-text-muted)]">Første svar (snitt)</p>
-                <p className="text-xl font-semibold text-[var(--hiver-text)] tabular-nums">
+              <div className="min-w-0 overflow-hidden">
+                <p className="text-xs sm:text-sm text-[var(--hiver-text-muted)] truncate">Åpne / venter</p>
+                <p className="text-xl sm:text-2xl font-semibold text-[var(--hiver-text)] tabular-nums truncate">{stats.openCount}</p>
+              </div>
+            </div>
+            <div className="card-panel p-4 sm:p-5 flex items-center gap-3 sm:gap-4 min-w-0 overflow-hidden">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-rose-500/15 flex items-center justify-center shrink-0">
+                <UserX className="w-5 h-5 sm:w-6 sm:h-6 text-rose-600" />
+              </div>
+              <div className="min-w-0 overflow-hidden">
+                <p className="text-xs sm:text-sm text-[var(--hiver-text-muted)] truncate">Ufordelte</p>
+                <p className="text-xl sm:text-2xl font-semibold text-[var(--hiver-text)] tabular-nums truncate">{stats.unassignedCount}</p>
+              </div>
+            </div>
+            <div className="card-panel p-4 sm:p-5 flex items-center gap-3 sm:gap-4 min-w-0 overflow-hidden">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-emerald-500/15 flex items-center justify-center shrink-0">
+                <MessageCircle className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-600" />
+              </div>
+              <div className="min-w-0 overflow-hidden">
+                <p className="text-xs sm:text-sm text-[var(--hiver-text-muted)] truncate">Første svar (snitt)</p>
+                <p className="text-lg sm:text-xl font-semibold text-[var(--hiver-text)] tabular-nums truncate">
                   {stats.avgFirstResponseHours > 0 ? formatDuration(stats.avgFirstResponseHours) : '–'}
                 </p>
               </div>
             </div>
-            <div className="card-panel p-5 flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-sky-500/15 flex items-center justify-center shrink-0">
-                <Target className="w-6 h-6 text-sky-600" />
+            <div className="card-panel p-4 sm:p-5 flex items-center gap-3 sm:gap-4 min-w-0 overflow-hidden">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-sky-500/15 flex items-center justify-center shrink-0">
+                <Target className="w-5 h-5 sm:w-6 sm:h-6 text-sky-600" />
               </div>
-              <div className="min-w-0">
-                <p className="text-sm text-[var(--hiver-text-muted)]">Løsningstid (snitt)</p>
-                <p className="text-xl font-semibold text-[var(--hiver-text)] tabular-nums">
+              <div className="min-w-0 overflow-hidden">
+                <p className="text-xs sm:text-sm text-[var(--hiver-text-muted)] truncate">Løsningstid (snitt)</p>
+                <p className="text-lg sm:text-xl font-semibold text-[var(--hiver-text)] tabular-nums truncate">
                   {stats.avgResolutionHours > 0 ? formatDuration(stats.avgResolutionHours) : '–'}
                 </p>
               </div>
             </div>
-            <div className="card-panel p-5 flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-red-500/15 flex items-center justify-center shrink-0">
-                <AlertCircle className="w-6 h-6 text-red-600" />
+            <div className="card-panel p-4 sm:p-5 flex items-center gap-3 sm:gap-4 min-w-0 overflow-hidden">
+              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-red-500/15 flex items-center justify-center shrink-0">
+                <AlertCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-600" />
               </div>
-              <div className="min-w-0">
-                <p className="text-sm text-[var(--hiver-text-muted)]">Høy / Haster</p>
-                <p className="text-2xl font-semibold text-[var(--hiver-text)] tabular-nums">{stats.highUrgentCount}</p>
+              <div className="min-w-0 overflow-hidden">
+                <p className="text-xs sm:text-sm text-[var(--hiver-text-muted)] truncate">Høy / Haster</p>
+                <p className="text-xl sm:text-2xl font-semibold text-[var(--hiver-text)] tabular-nums truncate">{stats.highUrgentCount}</p>
               </div>
             </div>
           </div>
 
+          {/* Insights / suggested analysis */}
+          {(() => {
+            const tips: { icon: React.ReactNode; text: string; type: 'positive' | 'neutral' | 'action' }[] = [];
+            if (stats.total === 0) {
+              tips.push({ icon: <Inbox className="w-4 h-4 shrink-0" />, text: 'Ingen saker i valgt periode. Prøv å utvide perioden eller fjern filtre.', type: 'neutral' });
+            } else {
+              if (stats.resolutionRate >= 80) {
+                tips.push({ icon: <TrendingUp className="w-4 h-4 shrink-0" />, text: `Løsningsrate er god (${stats.resolutionRate}%). Fortsett slik.`, type: 'positive' });
+              } else if (stats.resolutionRate > 0) {
+                tips.push({ icon: <TrendingUp className="w-4 h-4 shrink-0" />, text: `Løsningsrate er ${stats.resolutionRate}%. Vurder å prioritere lukking av løste saker.`, type: 'action' });
+              }
+              if (stats.unassignedCount > 0) {
+                tips.push({ icon: <UserX className="w-4 h-4 shrink-0" />, text: `${stats.unassignedCount} sak(er) uten tildeling – vurder å tildele for raskere oppfølging.`, type: 'action' });
+              }
+              if (stats.openCount > 0 && stats.total > 0 && stats.openCount / stats.total > 0.5) {
+                tips.push({ icon: <AlertCircle className="w-4 h-4 shrink-0" />, text: `${stats.openCount} åpne saker – vurder kapasitet eller prioritering.`, type: 'action' });
+              }
+              if (stats.avgFirstResponseHours >= 24 && stats.avgFirstResponseHours > 0) {
+                tips.push({ icon: <MessageCircle className="w-4 h-4 shrink-0" />, text: `Snitt første svar er ${formatDuration(stats.avgFirstResponseHours)} – vurder mål for svarstid (f.eks. under 24 t).`, type: 'action' });
+              } else if (stats.avgFirstResponseHours > 0 && stats.avgFirstResponseHours < 4) {
+                tips.push({ icon: <MessageCircle className="w-4 h-4 shrink-0" />, text: `Rask første svar (snitt ${formatDuration(stats.avgFirstResponseHours)}) – bra kundeservice.`, type: 'positive' });
+              }
+              if (stats.highUrgentCount > 0) {
+                tips.push({ icon: <AlertCircle className="w-4 h-4 shrink-0" />, text: `${stats.highUrgentCount} sak(er) med høy/haster – sjekk at de følges opp.`, type: 'action' });
+              }
+            }
+            if (tips.length === 0 && stats.total > 0) {
+              tips.push({ icon: <Lightbulb className="w-4 h-4 shrink-0" />, text: 'Bruk filtre og periode for å finne mønstre. Diagrammene under viser fordeling og trender.', type: 'neutral' });
+            }
+            return tips.length > 0 ? (
+              <div className="card-panel p-5 overflow-hidden">
+                <h2 className="text-sm font-semibold text-[var(--hiver-text-muted)] uppercase tracking-wider mb-3 flex items-center gap-2">
+                  <Lightbulb className="w-4 h-4" />
+                  Anbefalinger og analyse
+                </h2>
+                <ul className="space-y-2 min-w-0">
+                  {tips.map((t, i) => (
+                    <li
+                      key={i}
+                      className={`flex items-start gap-2 text-sm rounded-lg px-3 py-2 ${
+                        t.type === 'positive' ? 'bg-emerald-500/10 text-emerald-800 dark:bg-emerald-400/20' : t.type === 'action' ? 'bg-amber-500/10 text-amber-800 dark:bg-amber-400/20' : 'bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)]'
+                      }`}
+                    >
+                      <span className={t.type === 'positive' ? 'text-emerald-600' : t.type === 'action' ? 'text-amber-600' : 'text-[var(--hiver-text-muted)]'}>{t.icon}</span>
+                      <span className="min-w-0 break-words">{t.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null;
+          })()}
+
           {/* Trend: opened vs closed */}
-          <div className="card-panel p-6">
+          <div className="card-panel p-4 sm:p-6 overflow-hidden">
             <h2 className="text-sm font-semibold text-[var(--hiver-text-muted)] uppercase tracking-wider mb-2">
               Saker åpnet og lukket per dag
             </h2>
             <p className="text-xs text-[var(--hiver-text-muted)] mb-4">
               Blå = åpnet, grønn = lukket (løst/avsluttet)
             </p>
-            <TrendChart data={trendData} yMax={trendMax} />
+            <div className="min-w-0 overflow-x-auto">
+              <TrendChart data={trendData} yMax={trendMax} />
+            </div>
             <div className="flex gap-6 mt-2 text-xs text-[var(--hiver-text-muted)]">
               <span className="flex items-center gap-1.5">
                 <span className="w-3 h-0.5 rounded-full bg-[var(--hiver-accent)]" /> Åpnet
@@ -658,39 +774,39 @@ export function AnalyticsPage() {
           </div>
 
           {/* Funnel */}
-          <div className="card-panel p-6">
+          <div className="card-panel p-4 sm:p-6 overflow-hidden">
             <h2 className="text-sm font-semibold text-[var(--hiver-text-muted)] uppercase tracking-wider mb-4">
               Flyt: status fra ny til lukket
             </h2>
-            <div className="flex flex-col sm:flex-row gap-4 sm:gap-2 items-stretch sm:items-end">
-              {funnelSteps.map((step, i) => (
-                <div key={step.label} className="flex-1 flex flex-col gap-2 min-w-0">
-                  <div
-                    className="rounded-lg h-8 flex items-center justify-center transition-all min-h-[2rem]"
-                    style={{
-                      backgroundColor: step.color,
-                      opacity: 0.9,
-                      width: `${Math.max(20, (step.value / funnelMax) * 100)}%`,
-                      marginLeft: i === 0 ? 0 : 'auto',
-                      marginRight: i === funnelSteps.length - 1 ? 0 : 'auto',
-                    }}
-                  >
-                    <span className="text-xs font-semibold text-white drop-shadow-sm truncate px-2">
-                      {step.value}
-                    </span>
+            <div className="flex flex-col sm:flex-row gap-4 sm:gap-2 items-stretch sm:items-end min-w-0">
+              {funnelSteps.map((step) => (
+                <div key={step.label} className="flex-1 flex flex-col gap-2 min-w-0 max-w-full">
+                  <div className="w-full min-h-[2rem] flex items-center">
+                    <div
+                      className="rounded-lg h-8 flex items-center justify-center transition-all min-w-[24px] flex-shrink-0"
+                      style={{
+                        backgroundColor: step.color,
+                        opacity: 0.9,
+                        width: `${Math.max(15, Math.min(100, funnelMax > 0 ? (step.value / funnelMax) * 100 : 0))}%`,
+                      }}
+                    >
+                      <span className="text-xs font-semibold text-white drop-shadow-sm truncate px-2">
+                        {step.value}
+                      </span>
+                    </div>
                   </div>
-                  <span className="text-xs font-medium text-[var(--hiver-text-muted)]">{step.label}</span>
+                  <span className="text-xs font-medium text-[var(--hiver-text-muted)] truncate">{step.label}</span>
                 </div>
               ))}
             </div>
           </div>
 
           {/* Bar: Status */}
-          <div className="card-panel p-6">
+          <div className="card-panel p-4 sm:p-6 overflow-hidden">
             <h2 className="text-sm font-semibold text-[var(--hiver-text-muted)] uppercase tracking-wider mb-4">
               Saker etter status
             </h2>
-            <div className="flex items-end gap-4 h-48">
+            <div className="flex items-end gap-2 sm:gap-4 h-48 min-w-0 overflow-x-auto pb-1">
               {statusItems.map(({ label, value, color }) => (
                 <div key={label} className="flex-1 flex flex-col items-center gap-2 min-w-0">
                   <div className="w-full flex-1 flex flex-col justify-end min-h-[2rem]">
@@ -710,11 +826,11 @@ export function AnalyticsPage() {
 
           {/* Bar: Priority */}
           {priorityItems.some((i) => i.value > 0) && (
-            <div className="card-panel p-6">
+            <div className="card-panel p-4 sm:p-6 overflow-hidden">
               <h2 className="text-sm font-semibold text-[var(--hiver-text-muted)] uppercase tracking-wider mb-4">
                 Saker etter prioritet
               </h2>
-              <div className="flex items-end gap-4 h-40">
+              <div className="flex items-end gap-2 sm:gap-4 h-40 min-w-0 overflow-x-auto pb-1">
                 {priorityItems.map(({ label, value }) => (
                   <div key={label} className="flex-1 flex flex-col items-center gap-2 min-w-0">
                     <div className="w-full flex-1 flex flex-col justify-end min-h-[2rem]">
@@ -738,11 +854,11 @@ export function AnalyticsPage() {
 
           {/* Bar: Category */}
           {categoryItems.length > 0 && (
-            <div className="card-panel p-6">
+            <div className="card-panel p-4 sm:p-6 overflow-hidden">
               <h2 className="text-sm font-semibold text-[var(--hiver-text-muted)] uppercase tracking-wider mb-4">
                 Saker etter kategori
               </h2>
-              <div className="flex items-end gap-2 h-40 overflow-x-auto pb-2">
+              <div className="flex items-end gap-2 h-40 min-w-0 overflow-x-auto pb-2">
                 {categoryItems.map(({ label, value }) => (
                   <div key={label} className="flex-shrink-0 w-20 flex flex-col items-center gap-2">
                     <div className="w-full flex-1 flex flex-col justify-end min-h-[2rem]">
@@ -766,11 +882,11 @@ export function AnalyticsPage() {
 
           {/* Bar: Team */}
           {teamItems.length > 0 && (
-            <div className="card-panel p-6">
+            <div className="card-panel p-4 sm:p-6 overflow-hidden">
               <h2 className="text-sm font-semibold text-[var(--hiver-text-muted)] uppercase tracking-wider mb-4">
                 Saker etter team
               </h2>
-              <div className="flex items-end gap-2 h-40 overflow-x-auto pb-2">
+              <div className="flex items-end gap-2 h-40 min-w-0 overflow-x-auto pb-2">
                 {teamItems.map(({ label, value }) => (
                   <div key={label} className="flex-shrink-0 w-24 flex flex-col items-center gap-2">
                     <div className="w-full flex-1 flex flex-col justify-end min-h-[2rem]">

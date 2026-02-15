@@ -1,9 +1,7 @@
-import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGmail } from '../../contexts/GmailContext';
 import { useTickets } from '../../contexts/TicketContext';
-import { formatRelative, formatDateTime } from '../../utils/formatters';
-import { supabase } from '../../services/supabase';
+import { formatDateTime } from '../../utils/formatters';
 import { Mail, RefreshCw, Unplug } from 'lucide-react';
 
 /**
@@ -24,20 +22,6 @@ export function ConnectedInboxCard() {
   const { fetchTickets, setAssignmentView } = useTickets();
   const navigate = useNavigate();
 
-  const [cronLastRunAt, setCronLastRunAt] = useState<string | null>(null);
-
-  useEffect(() => {
-    supabase
-      .from('gmail_sync_cron_last_run')
-      .select('last_run_at')
-      .eq('id', 1)
-      .maybeSingle()
-      .then(({ data }) => {
-        const row = data as { last_run_at?: string } | null;
-        setCronLastRunAt(row?.last_run_at ?? null);
-      });
-  }, []);
-
   return (
     <div className="card-panel p-5 border border-[var(--hiver-border)] rounded-lg border-l-4 border-l-emerald-500">
       <div className="flex items-start justify-between gap-4">
@@ -57,8 +41,8 @@ export function ConnectedInboxCard() {
               <p className="text-xs text-[var(--hiver-text-muted)] truncate">Gruppe: {groupEmail}</p>
             )}
             {lastSyncAt && (
-              <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">
-                Sist synkronisert: {formatRelative(lastSyncAt)}
+              <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5" title={formatDateTime(lastSyncAt)}>
+                Sist sync: {formatDateTime(lastSyncAt)}
               </p>
             )}
           </div>
@@ -99,11 +83,6 @@ export function ConnectedInboxCard() {
             Lukk
           </button>
         </div>
-      )}
-      {cronLastRunAt && (
-        <p className="text-xs text-[var(--hiver-text-muted)] mt-3">
-          Siste sync fra db: {formatDateTime(cronLastRunAt)}
-        </p>
       )}
     </div>
   );

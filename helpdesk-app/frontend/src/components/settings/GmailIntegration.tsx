@@ -5,7 +5,7 @@ import { useTickets } from '../../contexts/TicketContext';
 import { useTenant } from '../../contexts/TenantContext';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
 import { isAdmin } from '../../types/roles';
-import { formatRelative, formatDateTime } from '../../utils/formatters';
+import { formatDateTime } from '../../utils/formatters';
 import { supabase } from '../../services/supabase';
 import { useToast } from '../../contexts/ToastContext';
 import { Mail, RefreshCw, Unplug, ArrowLeft, Key } from 'lucide-react';
@@ -32,8 +32,6 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
   const { role } = useCurrentUserRole();
   const toast = useToast();
   const navigate = useNavigate();
-
-  const [cronLastRunAt, setCronLastRunAt] = useState<string | null>(null);
 
   const [oauthClientId, setOauthClientId] = useState('');
   const [oauthClientSecret, setOauthClientSecret] = useState('');
@@ -92,18 +90,6 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
     refetchTenantOAuth();
   };
 
-  useEffect(() => {
-    supabase
-      .from('gmail_sync_cron_last_run')
-      .select('last_run_at')
-      .eq('id', 1)
-      .maybeSingle()
-      .then(({ data }) => {
-        const row = data as { last_run_at: string } | null;
-        setCronLastRunAt(row?.last_run_at ?? null);
-      });
-  }, []);
-
   if (loading) {
     return (
       <div className="text-[var(--hiver-text-muted)] text-sm">Laster…</div>
@@ -144,13 +130,8 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
           </p>
 
           {lastSyncAt && (
-            <p className="text-xs text-[var(--hiver-text-muted)]">
-              Sist synkronisert: {formatRelative(lastSyncAt)}
-            </p>
-          )}
-          {cronLastRunAt && (
-            <p className="text-xs text-[var(--hiver-text-muted)]">
-              Siste sync kjørt fra db: {formatDateTime(cronLastRunAt)}
+            <p className="text-xs text-[var(--hiver-text-muted)]" title={formatDateTime(lastSyncAt)}>
+              Sist sync: {formatDateTime(lastSyncAt)}
             </p>
           )}
           <div className="flex gap-2">
@@ -340,11 +321,6 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
                   )}
                 </div>
               </div>
-              {cronLastRunAt && (
-                <p className="text-xs text-[var(--hiver-text-muted)] mt-3">
-                  Siste sync kjørt fra db: {formatDateTime(cronLastRunAt)}
-                </p>
-              )}
               <div className="mt-6 flex justify-end">
                 <button
                   type="button"

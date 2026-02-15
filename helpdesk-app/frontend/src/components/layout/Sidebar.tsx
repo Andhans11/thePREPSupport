@@ -6,6 +6,7 @@ import {
   Users,
   BarChart3,
   Calendar,
+  Clock,
   Settings,
   Building2,
   ChevronDown,
@@ -14,22 +15,24 @@ import {
   X,
 } from 'lucide-react';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
-import { canAccessSettings } from '../../types/roles';
+import { canAccessSettings, canAccessAnalytics, canAccessTimeRegistration } from '../../types/roles';
 import { useTenant } from '../../contexts/TenantContext';
 import { supabase } from '../../services/supabase';
 
-const MAIN_NAV = [
-  { to: '/', label: 'Dashbord', icon: LayoutDashboard },
-  { to: '/tickets', label: 'Saker', icon: Ticket },
-  { to: '/planning', label: 'Planlegging', icon: Calendar },
-  { to: '/customers', label: 'Kunder', icon: Users },
-  { to: '/analytics', label: 'Analyse', icon: BarChart3 },
+const MAIN_NAV_ITEMS = [
+  { to: '/', label: 'Dashbord', icon: LayoutDashboard, show: () => true },
+  { to: '/tickets', label: 'Saker', icon: Ticket, show: () => true },
+  { to: '/planning', label: 'Planlegging', icon: Calendar, show: () => true },
+  { to: '/timeregistrering', label: 'Timeregistrering', icon: Clock, show: canAccessTimeRegistration },
+  { to: '/customers', label: 'Kunder', icon: Users, show: () => true },
+  { to: '/analytics', label: 'Analyse', icon: BarChart3, show: canAccessAnalytics },
 ] as const;
 
 export function Sidebar() {
   const location = useLocation();
   const { role } = useCurrentUserRole();
   const showSettings = canAccessSettings(role);
+  const mainNav = MAIN_NAV_ITEMS.filter((item) => item.show(role));
   const { tenants, currentTenantId, setCurrentTenantId, loading: tenantLoading } = useTenant();
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [tenantOpen, setTenantOpen] = useState(false);
@@ -173,7 +176,7 @@ export function Sidebar() {
         )}
       </div>
       <nav className="flex-1 overflow-y-auto p-3 space-y-0.5">
-        {MAIN_NAV.map(({ to, label, icon: Icon }) => {
+        {mainNav.map(({ to, label, icon: Icon }) => {
           const isActive =
             to === '/'
               ? location.pathname === '/'

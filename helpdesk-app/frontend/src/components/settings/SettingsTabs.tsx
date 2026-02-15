@@ -1,9 +1,9 @@
 import { useSearchParams } from 'react-router-dom';
-import { Building2, Users, UsersRound, FileText, Clock, FileSignature, Database, Mail } from 'lucide-react';
+import { Building2, Users, UsersRound, FileText, Clock, FileSignature, Database, Mail, Timer } from 'lucide-react';
 import { canManageUsers } from '../../types/roles';
 import type { Role } from '../../types/roles';
 
-export type SettingsTabId = 'company' | 'inboxes' | 'users' | 'teams' | 'templates' | 'business_hours' | 'signatures' | 'master_data';
+export type SettingsTabId = 'company' | 'inboxes' | 'users' | 'teams' | 'templates' | 'business_hours' | 'signatures' | 'master_data' | 'time_registration';
 
 const TABS: { id: SettingsTabId; label: string; icon: typeof Building2; requiresAdmin?: boolean }[] = [
   { id: 'company', label: 'Selskap', icon: Building2 },
@@ -14,6 +14,7 @@ const TABS: { id: SettingsTabId; label: string; icon: typeof Building2; requires
   { id: 'business_hours', label: 'Åpningstider', icon: Clock, requiresAdmin: true },
   { id: 'signatures', label: 'Signaturer', icon: FileSignature, requiresAdmin: true },
   { id: 'master_data', label: 'Stamdata', icon: Database, requiresAdmin: true },
+  { id: 'time_registration', label: 'Timeregistrering', icon: Timer, requiresAdmin: true },
 ];
 
 interface SettingsTabsProps {

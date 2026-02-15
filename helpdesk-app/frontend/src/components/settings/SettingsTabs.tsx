@@ -56,7 +56,7 @@ export function SettingsTabs({ currentRole, children }: SettingsTabsProps) {
           })}
         </nav>
       </div>
-      <div className="flex-1 overflow-auto p-6 w-full">{children}</div>
+      <div className="flex-1 overflow-auto p-6 pb-24 w-full">{children}</div>
     </div>
   );
 }

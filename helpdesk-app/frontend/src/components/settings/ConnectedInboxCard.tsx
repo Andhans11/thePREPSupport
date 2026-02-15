@@ -4,11 +4,11 @@ import { useGmail } from '../../contexts/GmailContext';
 import { useTickets } from '../../contexts/TicketContext';
 import { formatRelative, formatDateTime } from '../../utils/formatters';
 import { supabase } from '../../services/supabase';
-import { Mail, RefreshCw, Unplug, Building2 } from 'lucide-react';
-import { SaveButton } from '../ui/SaveButton';
+import { Mail, RefreshCw, Unplug } from 'lucide-react';
 
 /**
  * Card showing one connected email inbox (Gmail). Used in the E-post innbokser list.
+ * Group/support email is shown as "Gruppe: ..." in the card; no separate editable field.
  */
 export function ConnectedInboxCard() {
   const {
@@ -16,22 +16,15 @@ export function ConnectedInboxCard() {
     groupEmail,
     lastSyncAt,
     syncing,
-    savingGroupEmail,
     error,
     syncNow,
     disconnect,
-    updateGroupEmail,
     clearError,
   } = useGmail();
   const { fetchTickets, setAssignmentView } = useTickets();
   const navigate = useNavigate();
 
-  const [groupEmailInput, setGroupEmailInput] = useState(groupEmail ?? '');
   const [cronLastRunAt, setCronLastRunAt] = useState<string | null>(null);
-
-  useEffect(() => {
-    setGroupEmailInput(groupEmail ?? '');
-  }, [groupEmail]);
 
   useEffect(() => {
     supabase
@@ -44,11 +37,6 @@ export function ConnectedInboxCard() {
         setCronLastRunAt(row?.last_run_at ?? null);
       });
   }, []);
-
-  const handleSaveGroupEmail = () => {
-    const value = groupEmailInput.trim() || null;
-    updateGroupEmail(value);
-  };
 
   return (
     <div className="card-panel p-5 border border-[var(--hiver-border)] rounded-lg border-l-4 border-l-emerald-500">
@@ -112,33 +100,11 @@ export function ConnectedInboxCard() {
           </button>
         </div>
       )}
-      <div className="mt-4 pt-4 border-t border-[var(--hiver-border)]">
-        <h4 className="text-xs font-medium text-[var(--hiver-text-muted)] flex items-center gap-1.5 mb-2">
-          <Building2 className="w-3.5 h-3.5" />
-          Gruppe-e-post å speile (valgfritt)
-        </h4>
-        <div className="flex gap-2 flex-wrap">
-          <input
-            type="email"
-            value={groupEmailInput}
-            onChange={(e) => setGroupEmailInput(e.target.value)}
-            placeholder="f.eks. support@dittdomene.no"
-            className="flex-1 min-w-[180px] rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
-          />
-          <SaveButton
-            onClick={handleSaveGroupEmail}
-            loading={savingGroupEmail}
-            disabled={groupEmailInput.trim() === (groupEmail ?? '')}
-          >
-            Lagre
-          </SaveButton>
-        </div>
-        {cronLastRunAt && (
-          <p className="text-xs text-[var(--hiver-text-muted)] mt-2">
-            Siste sync fra db: {formatDateTime(cronLastRunAt)}
-          </p>
-        )}
-      </div>
+      {cronLastRunAt && (
+        <p className="text-xs text-[var(--hiver-text-muted)] mt-3">
+          Siste sync fra db: {formatDateTime(cronLastRunAt)}
+        </p>
+      )}
     </div>
   );
 }

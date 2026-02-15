@@ -25,7 +25,7 @@ interface GmailContextValue {
   syncing: boolean;
   savingGroupEmail: boolean;
   error: string | null;
-  connectGmail: (teamEmail?: string | null, accountType?: 'user' | 'group') => void;
+  connectGmail: (teamEmail?: string | null) => void;
   isGmailOAuthConfigured: boolean;
   handleOAuthCallback: (code: string, tenantIdFromState?: string | null, groupEmail?: string | null) => Promise<{ ok: boolean; error?: string }>;
   syncNow: () => Promise<{ success: boolean; created?: number }>;
@@ -99,9 +99,8 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
   }, [gmailSync, currentTenantId, fetchGmailSync]);
 
   const GMAIL_CONNECT_GROUP_EMAIL_KEY = 'helpdesk_gmail_connect_group_email';
-  const GMAIL_CONNECT_ACCOUNT_TYPE_KEY = 'helpdesk_gmail_connect_account_type';
 
-  const connectGmail = (teamEmail?: string | null, accountType?: 'user' | 'group') => {
+  const connectGmail = (teamEmail?: string | null) => {
     setError(null);
     if (!currentTenantId) {
       setError('Velg en organisasjon først (øverst på siden), deretter prøv å koble til Gmail igjen.');
@@ -113,9 +112,8 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
       setError('Google OAuth er ikke konfigurert for denne organisasjonen. Be en administrator om å legge til Client ID og Secret under E-post innbokser.');
       return;
     }
-    if (typeof window !== 'undefined') {
-      if (teamEmail?.trim()) window.sessionStorage.setItem(GMAIL_CONNECT_GROUP_EMAIL_KEY, teamEmail.trim());
-      if (accountType) window.sessionStorage.setItem(GMAIL_CONNECT_ACCOUNT_TYPE_KEY, accountType);
+    if (typeof window !== 'undefined' && teamEmail?.trim()) {
+      window.sessionStorage.setItem(GMAIL_CONNECT_GROUP_EMAIL_KEY, teamEmail.trim());
     }
     window.location.href = url;
   };
@@ -133,7 +131,6 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
       if (result.success) {
         if (typeof window !== 'undefined') {
           window.sessionStorage.removeItem('helpdesk_gmail_connect_group_email');
-          window.sessionStorage.removeItem('helpdesk_gmail_connect_account_type');
         }
         fetchGmailSync().catch(() => {});
         return { ok: true };

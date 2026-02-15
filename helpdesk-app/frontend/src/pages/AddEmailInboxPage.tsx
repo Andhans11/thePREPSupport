@@ -4,7 +4,7 @@ import { GmailIntegration } from '../components/settings/GmailIntegration';
 
 /**
  * Dedicated page for adding a new email inbox. Shows the full flow:
- * admin OAuth config (if admin), enter team email, choose account type, authorize with Google.
+ * admin OAuth config (if admin), enter team email, authorize with Google (Client ID/Secret).
  */
 export function AddEmailInboxPage() {
   return (

@@ -8,10 +8,8 @@ import { isAdmin } from '../../types/roles';
 import { formatRelative, formatDateTime } from '../../utils/formatters';
 import { supabase } from '../../services/supabase';
 import { useToast } from '../../contexts/ToastContext';
-import { Mail, RefreshCw, Unplug, Building2, User, Users, ArrowLeft, Key } from 'lucide-react';
+import { Mail, RefreshCw, Unplug, ArrowLeft, Key } from 'lucide-react';
 import { SaveButton } from '../ui/SaveButton';
-
-type AccountType = 'user' | 'group';
 
 export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' }) {
   const {
@@ -21,13 +19,11 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
     lastSyncAt,
     loading,
     syncing,
-    savingGroupEmail,
     error,
     connectGmail,
     isGmailOAuthConfigured,
     syncNow,
     disconnect,
-    updateGroupEmail,
     clearError,
     refetchTenantOAuth,
   } = useGmail();
@@ -37,8 +33,6 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
   const toast = useToast();
   const navigate = useNavigate();
 
-  const [groupEmailInput, setGroupEmailInput] = useState(groupEmail ?? '');
-  const [groupEmailTouched, setGroupEmailTouched] = useState(false);
   const [cronLastRunAt, setCronLastRunAt] = useState<string | null>(null);
 
   const [oauthClientId, setOauthClientId] = useState('');
@@ -46,18 +40,13 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
   const [savingOAuth, setSavingOAuth] = useState(false);
   const adminCanEditOAuth = isAdmin(role);
 
-  // Hiver-style flow: step 1 = enter email + type, step 2 = authorize
+  // Step 1 = enter team email, step 2 = authorize with Google (Client ID/Secret handle both user and group)
   const [setupStep, setSetupStep] = useState<1 | 2>(1);
   const [teamEmail, setTeamEmail] = useState('');
-  const [accountType, setAccountType] = useState<AccountType>('user');
   const [teamEmailTouched, setTeamEmailTouched] = useState(false);
 
   const teamEmailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(teamEmail.trim());
   const canContinue = teamEmail.trim().length > 0 && teamEmailValid;
-
-  useEffect(() => {
-    setGroupEmailInput(groupEmail ?? '');
-  }, [groupEmail]);
 
   useEffect(() => {
     if (!isConnected) setSetupStep(1);
@@ -115,15 +104,6 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
       });
   }, []);
 
-  const handleSaveGroupEmail = () => {
-    setGroupEmailTouched(true);
-    const value = groupEmailInput.trim() || null;
-    if (value && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-      return;
-    }
-    updateGroupEmail(value);
-  };
-
   if (loading) {
     return (
       <div className="text-[var(--hiver-text-muted)] text-sm">Laster…</div>
@@ -158,41 +138,10 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
         <div className="mt-4 space-y-5">
           <p className="text-sm text-[var(--hiver-text-muted)]">
             Tilkoblet som <strong className="text-[var(--hiver-text)]">{gmailEmail}</strong>
-          </p>
-
-          <div>
-            <h3 className="text-sm font-medium text-[var(--hiver-text)] flex items-center gap-2 mb-1">
-              <Building2 className="w-4 h-4" />
-              Gruppe-e-post å speile (Google Workspace)
-            </h3>
-            <p className="text-xs text-[var(--hiver-text-muted)] mb-2">
-              Sett adressen til den delte eller gruppeinnboksen (f.eks. support@dittdomene.no). Vi synkroniserer
-              kun meldinger som sendes <em>til</em> denne adressen. La stå tom for å synkronisere din personlige innboks.
-            </p>
-            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-2">
-              <strong>Svaring vises fra denne adressen:</strong> For at utgående svar skal vises som sendt fra gruppe-e-posten, må du legge den til i Gmail/Workspace: <strong>Innstillinger → Kontoer → Send e-post som → Legg til annen e-postadresse</strong>. Verifiser adressen hvis Google ber om det.
-            </p>
-            <div className="flex gap-2 flex-wrap">
-              <input
-                type="email"
-                value={groupEmailInput}
-                onChange={(e) => setGroupEmailInput(e.target.value)}
-                onBlur={() => setGroupEmailTouched(true)}
-                placeholder="f.eks. support@dittdomene.no"
-                className="flex-1 min-w-[200px] rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 focus:border-[var(--hiver-accent)]"
-              />
-              <SaveButton
-                onClick={handleSaveGroupEmail}
-                loading={savingGroupEmail}
-                disabled={groupEmailInput.trim() === (groupEmail ?? '')}
-              >
-                Lagre
-              </SaveButton>
-            </div>
-            {groupEmailTouched && groupEmailInput.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(groupEmailInput.trim()) && (
-              <p className="text-xs text-red-600 mt-1">Skriv inn en gyldig e-postadresse.</p>
+            {groupEmail && (
+              <span className="block text-xs mt-0.5">Gruppe: {groupEmail}</span>
             )}
-          </div>
+          </p>
 
           {lastSyncAt && (
             <p className="text-xs text-[var(--hiver-text-muted)]">
@@ -390,51 +339,6 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
                     <p className="text-xs text-red-600 mt-1">Skriv inn en gyldig e-postadresse.</p>
                   )}
                 </div>
-                <div>
-                  <p className="text-sm font-medium text-[var(--hiver-text)] mb-2">
-                    Hva slags konto er dette?
-                  </p>
-                  <div className="space-y-3">
-                    <label className="flex items-start gap-3 p-3 rounded-lg border border-[var(--hiver-border)] cursor-pointer hover:bg-[var(--hiver-bg)]/50 has-[:checked]:border-[var(--hiver-accent)] has-[:checked]:bg-[var(--hiver-accent)]/5">
-                      <input
-                        type="radio"
-                        name="gmail-account-type"
-                        value="user"
-                        checked={accountType === 'user'}
-                        onChange={() => setAccountType('user')}
-                        className="mt-1 text-[var(--hiver-accent)]"
-                      />
-                      <div className="flex items-start gap-2">
-                        <User className="w-4 h-4 text-[var(--hiver-text-muted)] shrink-0 mt-0.5" />
-                        <div>
-                          <span className="font-medium text-[var(--hiver-text)]">Google brukerkonto</span>
-                          <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">
-                            En vanlig e-postkonto med adresse og passord.
-                          </p>
-                        </div>
-                      </div>
-                    </label>
-                    <label className="flex items-start gap-3 p-3 rounded-lg border border-[var(--hiver-border)] cursor-pointer hover:bg-[var(--hiver-bg)]/50 has-[:checked]:border-[var(--hiver-accent)] has-[:checked]:bg-[var(--hiver-accent)]/5">
-                      <input
-                        type="radio"
-                        name="gmail-account-type"
-                        value="group"
-                        checked={accountType === 'group'}
-                        onChange={() => setAccountType('group')}
-                        className="mt-1 text-[var(--hiver-accent)]"
-                      />
-                      <div className="flex items-start gap-2">
-                        <Users className="w-4 h-4 text-[var(--hiver-text-muted)] shrink-0 mt-0.5" />
-                        <div>
-                          <span className="font-medium text-[var(--hiver-text)]">Google-gruppe</span>
-                          <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">
-                            En Google-gruppe du er med i, med e-postadresse men uten eget passord.
-                          </p>
-                        </div>
-                      </div>
-                    </label>
-                  </div>
-                </div>
               </div>
               {cronLastRunAt && (
                 <p className="text-xs text-[var(--hiver-text-muted)] mt-3">
@@ -459,7 +363,6 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
               </h3>
               <p className="text-sm text-[var(--hiver-text)] mb-1">
                 Autoriser <strong>{teamEmail || 'e-postadressen'}</strong>
-                ({accountType === 'group' ? 'Google-gruppe' : 'Google brukerkonto'})
               </p>
               <p className="text-sm text-[var(--hiver-text-muted)] mb-6">
                 Du blir omdirigert til Google for å logge inn og gi nødvendige tillatelser for å koble innboksen til denne organisasjonen.
@@ -475,7 +378,7 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
                 </button>
                 <button
                   type="button"
-                  onClick={() => connectGmail(teamEmail.trim() || null, accountType)}
+                  onClick={() => connectGmail(teamEmail.trim() || null)}
                   disabled={!isGmailOAuthConfigured}
                   className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
                 >

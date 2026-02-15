@@ -231,7 +231,9 @@ async function runSyncForGmailRow(
   );
   const ticketReceivedSubject = (settingsMap['ticket_received_subject'] ?? '').trim();
   const ticketReceivedContent = (settingsMap['ticket_received_content'] ?? '').trim();
-  const sendTicketReceivedReplyEnabled = ticketReceivedContent.length > 0;
+  const defaultTicketReceivedBody =
+    'We have received your request. Your ticket number is {{ticket_number}}. We will get back to you as soon as possible.';
+  const ticketReceivedBody = ticketReceivedContent.length > 0 ? ticketReceivedContent : defaultTicketReceivedBody;
 
   const groupEmail = gmailRow.group_email ?? null;
   const groupEmailTrimmed = groupEmail != null && String(groupEmail).trim() !== '' ? String(groupEmail).trim() : null;
@@ -471,32 +473,30 @@ async function runSyncForGmailRow(
       }
     }
 
-    if (sendTicketReceivedReplyEnabled) {
-      const ticketNumber = (newTicket as { ticket_number?: string | null }).ticket_number?.trim() || '';
-      const subjectLine = ticketNumber ? `[${ticketNumber}] ${subject || '(No subject)'}`.trim() : (subject || 'Re: Support');
-      const replyBody = compileTicketReceivedTemplate(ticketReceivedContent, {
-        ticket_number: ticketNumber,
-        customer_name: fromName?.trim() || fromEmail,
-        customer_email: fromEmail,
-        ticket_subject: subject || '(No subject)',
-      });
-      const replySubject = ticketReceivedSubject || subjectLine;
-      const fromAddress = groupEmailTrimmed ?? (gmailRow.email_address?.trim() || '');
-      const fromDisplay = groupEmailTrimmed ? 'Support' : (gmailRow.email_address?.trim() || 'Support');
-      if (fromAddress) {
-        try {
-          await sendTicketReceivedReply(
-            accessToken,
-            msg.threadId,
-            fromEmail,
-            replySubject,
-            replyBody,
-            fromAddress,
-            fromDisplay
-          );
-        } catch (e) {
-          console.error('Failed to send ticket-received reply', e);
-        }
+    const ticketNumber = (newTicket as { ticket_number?: string | null }).ticket_number?.trim() || '';
+    const fromAddress = groupEmailTrimmed ?? (gmailRow.email_address?.trim() || '');
+    const fromDisplay = groupEmailTrimmed ? 'Support' : (gmailRow.email_address?.trim() || 'Support');
+    if (fromAddress) {
+      try {
+        const replyBody = compileTicketReceivedTemplate(ticketReceivedBody, {
+          ticket_number: ticketNumber,
+          customer_name: fromName?.trim() || fromEmail,
+          customer_email: fromEmail,
+          ticket_subject: subject || '(No subject)',
+        });
+        const subjectBase = (ticketReceivedSubject || subject || 'Your request').trim();
+        const replySubject = ticketNumber ? `[${ticketNumber}] ${subjectBase}` : subjectBase;
+        await sendTicketReceivedReply(
+          accessToken,
+          msg.threadId,
+          fromEmail,
+          replySubject,
+          replyBody,
+          fromAddress,
+          fromDisplay
+        );
+      } catch (e) {
+        console.error('Failed to send ticket-received reply', e);
       }
     }
 

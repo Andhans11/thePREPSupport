@@ -229,11 +229,17 @@ async function runSyncForGmailRow(
     {}
   );
   const emailSenderOnNewTicket = settingsMap['email_sender_on_new_ticket'] === true || settingsMap['email_sender_on_new_ticket'] === 'true';
-  const ticketReceivedSubject = (typeof settingsMap['ticket_received_subject'] === 'string' ? settingsMap['ticket_received_subject'] : '') as string;
-  const ticketReceivedContent = (typeof settingsMap['ticket_received_content'] === 'string' ? settingsMap['ticket_received_content'] : '') as string;
+  // Mottaksbekreftelse: subject and content from Settings → Maler (Mottaksbekreftelse)
+  const ticketReceivedSubjectRaw = settingsMap['ticket_received_subject'];
+  const ticketReceivedContentRaw = settingsMap['ticket_received_content'];
+  const ticketReceivedSubject =
+    typeof ticketReceivedSubjectRaw === 'string' ? ticketReceivedSubjectRaw.trim() : '';
+  const ticketReceivedContent =
+    typeof ticketReceivedContentRaw === 'string' ? String(ticketReceivedContentRaw).trim() : '';
   const defaultTicketReceivedBody =
     'We have received your request. Your ticket number is {{ticket_number}}. We will get back to you as soon as possible.';
-  const ticketReceivedBody = ticketReceivedContent.length > 0 ? ticketReceivedContent : defaultTicketReceivedBody;
+  const ticketReceivedBody =
+    ticketReceivedContent.length > 0 ? ticketReceivedContent : defaultTicketReceivedBody;
 
   const groupEmail = gmailRow.group_email ?? null;
   const groupEmailTrimmed = groupEmail != null && String(groupEmail).trim() !== '' ? String(groupEmail).trim() : null;
@@ -478,6 +484,7 @@ async function runSyncForGmailRow(
       const ticketNumber = (newTicket as { ticket_number?: string | null }).ticket_number?.trim() || '';
       const fromDisplay = groupEmailTrimmed ? 'Support' : (gmailRow.email_address?.trim() || 'Support');
       try {
+        // Use Mottaksbekreftelse content from settings (subject + body); fill template variables
         const replyBody = compileTicketReceivedTemplate(ticketReceivedBody, {
           ticket_number: ticketNumber,
           customer_name: fromName?.trim() || fromEmail,

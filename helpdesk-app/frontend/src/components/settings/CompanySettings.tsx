@@ -155,7 +155,7 @@ export function CompanySettings() {
   const labelClass = 'block text-sm font-medium text-[var(--hiver-text)] mb-1.5';
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 w-full max-w-full">
+    <div className="w-full max-w-full">
       <section className="card-panel p-6 min-w-0">
         <h2 className="text-lg font-semibold text-[var(--hiver-text)] flex items-center gap-2 mb-4">
           <Building2 className="w-5 h-5" />

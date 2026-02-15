@@ -117,7 +117,11 @@ serve(async (req) => {
       if (errJson.error || errJson.error_description) {
         details = [errJson.error, errJson.error_description].filter(Boolean).join(': ');
       }
-      if (errJson.error === 'unauthorized_client') {
+      if (errJson.error === 'invalid_client') {
+        message =
+          'Google godtar ikke Client ID eller Client Secret. Sjekk under Innstillinger → E-post innbokser at du har limt inn riktig Client ID og Client Secret fra samme OAuth-klient i Google Cloud Console (Legitimasjoner). Ingen mellomrom i starten eller slutten. Hvis du har laget en ny hemmelighet i Google, bruk den nye. Detaljer: ' +
+          details;
+      } else if (errJson.error === 'unauthorized_client') {
         message =
           'Google godtar ikke denne OAuth-klienten. Sjekk: (1) I Google Cloud Console → APIer og tjenester → legitimasjon: at denne klientens «Autoriserte omdirigerings-URI-er» inneholder nøyaktig samme URL som appen bruker (f.eks. ' +
           REDIRECT_URI +

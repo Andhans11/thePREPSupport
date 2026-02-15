@@ -241,12 +241,13 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
                 <Key className="w-4 h-4" />
                 Google OAuth for denne organisasjonen (kun admin)
               </h3>
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div>
-                  <p className="text-xs text-[var(--hiver-text-muted)] mb-3">
-                    Hver organisasjon har sin egen Google OAuth-klient. Følg stegene til høyre i ditt eget Google Cloud-prosjekt, deretter lim inn Client ID og Secret her.
+              {oauthClientId.trim() ? (
+                <>
+                  <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-3 inline-flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500" aria-hidden />
+                    OAuth er konfigurert. Brukere kan koble til Gmail eller Google-gruppe. Du kan oppdatere nedenfor ved behov.
                   </p>
-                  <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-xl">
                     <div>
                       <label htmlFor="oauth-client-id" className="block text-xs font-medium text-[var(--hiver-text-muted)] mb-1">Client ID</label>
                       <input
@@ -265,49 +266,92 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
                         type="password"
                         value={oauthClientSecret}
                         onChange={(e) => setOauthClientSecret(e.target.value)}
-                        placeholder="Skriv inn for å sette eller endre"
+                        placeholder="Skriv inn for å endre og lagre"
                         autoComplete="off"
                         className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
                       />
                     </div>
                   </div>
-                  <div className="mt-3">
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
                     <SaveButton
                       onClick={handleSaveOAuth}
                       loading={savingOAuth}
                       disabled={!oauthClientId.trim() || !oauthClientSecret.trim()}
                     >
-                      Lagre OAuth-innstillinger
+                      Oppdater OAuth
                     </SaveButton>
+                    <span className="text-xs text-[var(--hiver-text-muted)]">Fyll inn Secret på nytt for å lagre (vi lagrer ikke Secret i klartekst).</span>
+                  </div>
+                </>
+              ) : (
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  <div>
+                    <p className="text-xs text-[var(--hiver-text-muted)] mb-3">
+                      Hver organisasjon har sin egen Google OAuth-klient. Følg stegene til høyre i ditt eget Google Cloud-prosjekt, deretter lim inn Client ID og Secret her.
+                    </p>
+                    <div className="space-y-3">
+                      <div>
+                        <label htmlFor="oauth-client-id" className="block text-xs font-medium text-[var(--hiver-text-muted)] mb-1">Client ID</label>
+                        <input
+                          id="oauth-client-id"
+                          type="text"
+                          value={oauthClientId}
+                          onChange={(e) => setOauthClientId(e.target.value)}
+                          placeholder="xxx.apps.googleusercontent.com"
+                          className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="oauth-client-secret-new" className="block text-xs font-medium text-[var(--hiver-text-muted)] mb-1">Client Secret</label>
+                        <input
+                          id="oauth-client-secret-new"
+                          type="password"
+                          value={oauthClientSecret}
+                          onChange={(e) => setOauthClientSecret(e.target.value)}
+                          placeholder="Skriv inn for å sette eller endre"
+                          autoComplete="off"
+                          className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-3">
+                      <SaveButton
+                        onClick={handleSaveOAuth}
+                        loading={savingOAuth}
+                        disabled={!oauthClientId.trim() || !oauthClientSecret.trim()}
+                      >
+                        Lagre OAuth-innstillinger
+                      </SaveButton>
+                    </div>
+                  </div>
+                  <div className="text-sm">
+                    <p className="font-medium text-[var(--hiver-text)] mb-2">Slik setter du opp (i ditt eget prosjekt):</p>
+                    <ol className="list-decimal list-inside space-y-2 text-[var(--hiver-text-muted)]">
+                      <li>
+                        Opprett eller velg et prosjekt i{' '}
+                        <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">Google Cloud Console</a>.
+                      </li>
+                      <li>
+                        <strong className="text-[var(--hiver-text)]">Konfigurer OAuth-samtykkeskjermen</strong> (påkrevd). Gå til{' '}
+                        <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">OAuth-samtykkeskjerm</a>, velg brukertype (ekstern hvis brukere utenfor Workspace), fyll ut appnavn og brukerstøtte-e-post, og lagre.
+                      </li>
+                      <li>
+                        Opprett legitimasjon: gå til{' '}
+                        <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">Legitimasjoner</a> → Opprett legitimasjon → OAuth 2.0-klient-ID. Type: Web-applikasjon.
+                      </li>
+                      <li>
+                        <strong className="text-[var(--hiver-text)]">Autoriserte JavaScript-origins:</strong> legg til appens opprinnelse (uten sti), f.eks. <code className="text-xs bg-[var(--hiver-bg)] px-1 rounded">{typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173'}</code>.
+                      </li>
+                      <li>
+                        <strong className="text-[var(--hiver-text)]">Autoriserte omdirigerings-URI-er:</strong> legg til callback-URL (med sti), f.eks. <code className="text-xs bg-[var(--hiver-bg)] px-1 rounded">{typeof window !== 'undefined' ? (import.meta.env?.VITE_GOOGLE_REDIRECT_URI || `${window.location.origin}/oauth/callback`) : 'https://.../oauth/callback'}</code>. Må være lik i Google, frontend og backend (REDIRECT_URI).
+                      </li>
+                      <li>
+                        Kopier Client ID og Client Secret fra Google og lim inn her. Klikk Lagre.
+                      </li>
+                    </ol>
                   </div>
                 </div>
-                <div className="text-sm">
-                  <p className="font-medium text-[var(--hiver-text)] mb-2">Slik setter du opp (i ditt eget prosjekt):</p>
-                  <ol className="list-decimal list-inside space-y-2 text-[var(--hiver-text-muted)]">
-                    <li>
-                      Opprett eller velg et prosjekt i{' '}
-                      <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">Google Cloud Console</a>.
-                    </li>
-                    <li>
-                      <strong className="text-[var(--hiver-text)]">Konfigurer OAuth-samtykkeskjermen</strong> (påkrevd). Gå til{' '}
-                      <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">OAuth-samtykkeskjerm</a>, velg brukertype (ekstern hvis brukere utenfor Workspace), fyll ut appnavn og brukerstøtte-e-post, og lagre.
-                    </li>
-                    <li>
-                      Opprett legitimasjon: gå til{' '}
-                      <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">Legitimasjoner</a> → Opprett legitimasjon → OAuth 2.0-klient-ID. Type: Web-applikasjon.
-                    </li>
-                    <li>
-                      <strong className="text-[var(--hiver-text)]">Autoriserte JavaScript-origins:</strong> legg til appens opprinnelse (uten sti), f.eks. <code className="text-xs bg-[var(--hiver-bg)] px-1 rounded">{typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173'}</code>. Brukes når brukeren starter innloggingen fra nettleseren.
-                    </li>
-                    <li>
-                      <strong className="text-[var(--hiver-text)]">Autoriserte omdirigerings-URI-er:</strong> legg til callback-URL (med sti), f.eks. <code className="text-xs bg-[var(--hiver-bg)] px-1 rounded">{typeof window !== 'undefined' ? (import.meta.env?.VITE_GOOGLE_REDIRECT_URI || `${window.location.origin}/oauth/callback`) : 'https://.../oauth/callback'}</code>. Denne må være nøyaktig lik i Google, i frontend (VITE_GOOGLE_REDIRECT_URI) og i backend (REDIRECT_URI i Edge Function-miljø).
-                    </li>
-                    <li>
-                      Kopier Client ID og Client Secret fra Google og lim inn i feltene til venstre. Klikk Lagre.
-                    </li>
-                  </ol>
-                </div>
-              </div>
+              )}
             </div>
           )}
 

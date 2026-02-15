@@ -51,14 +51,20 @@ export function ConnectedInboxCard() {
   };
 
   return (
-    <div className="card-panel p-5 border border-[var(--hiver-border)] rounded-lg">
+    <div className="card-panel p-5 border border-[var(--hiver-border)] rounded-lg border-l-4 border-l-emerald-500">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-10 h-10 rounded-lg bg-[var(--hiver-accent)]/10 flex items-center justify-center shrink-0">
             <Mail className="w-5 h-5 text-[var(--hiver-accent)]" />
           </div>
           <div className="min-w-0">
-            <p className="font-medium text-[var(--hiver-text)] truncate">{gmailEmail || 'E-post tilkoblet'}</p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <p className="font-medium text-[var(--hiver-text)] truncate">{gmailEmail || 'E-post tilkoblet'}</p>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 border border-emerald-200">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden />
+                Aktiv
+              </span>
+            </div>
             {groupEmail && (
               <p className="text-xs text-[var(--hiver-text-muted)] truncate">Gruppe: {groupEmail}</p>
             )}

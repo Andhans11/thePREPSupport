@@ -1,6 +1,6 @@
 # Gmail sync cron – one-time setup
 
-This guide sets up the **5-minute Gmail sync** that runs on the server (so emails are synced even when nobody has the app open).
+This guide sets up the **scheduled Gmail sync** that runs on the server (so emails are synced even when nobody has the app open). The default schedule is every 15 minutes (see migration `041_gmail_sync_cron_15min.sql`) to balance freshness with Edge Function invocation cost.
 
 ---
 
@@ -88,7 +88,7 @@ If you prefer to run the migration SQL by hand:
 
 ## Verify
 
-- In the Dashboard, go to **Database** → **Cron Jobs** (or **Integrations** → **Cron**). You should see **sync-gmail-emails-every-5-min** scheduled every 5 minutes.
+- In the Dashboard, go to **Database** → **Cron Jobs** (or **Integrations** → **Cron**). You should see **sync-gmail-emails-every-5-min** scheduled every 15 minutes.
 - After a few minutes, check that new emails still create tickets and that the **Last sync** time for Gmail in your app’s settings updates.
 
 If the cron fails (e.g. 401), double-check:

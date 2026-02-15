@@ -343,10 +343,10 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
                         <strong className="text-[var(--hiver-text)]">Autoriserte JavaScript-origins:</strong> legg til appens opprinnelse (uten sti), f.eks. <code className="text-xs bg-[var(--hiver-bg)] px-1 rounded">{typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173'}</code>.
                       </li>
                       <li>
-                        <strong className="text-[var(--hiver-text)]">Autoriserte omdirigerings-URI-er:</strong> legg til callback-URL (med sti), f.eks. <code className="text-xs bg-[var(--hiver-bg)] px-1 rounded">{typeof window !== 'undefined' ? (import.meta.env?.VITE_GOOGLE_REDIRECT_URI || `${window.location.origin}/oauth/callback`) : 'https://.../oauth/callback'}</code>. Må være lik i Google, frontend og backend (REDIRECT_URI).
+                        <strong className="text-[var(--hiver-text)]">Autoriserte omdirigerings-URI-er:</strong> legg til callback-URL (med sti), f.eks. <code className="text-xs bg-[var(--hiver-bg)] px-1 rounded">{typeof window !== 'undefined' ? (import.meta.env?.VITE_GOOGLE_REDIRECT_URI || `${window.location.origin}/oauth/callback`) : 'https://.../oauth/callback'}</code>. Må være nøyaktig lik i Google, frontend (VITE_GOOGLE_REDIRECT_URI) og backend (REDIRECT_URI). Får du «unauthorized_client» eller «Token exchange failed», sjekk at denne URI-en står i Google og at klienttypen er «Nettapplikasjon».
                       </li>
                       <li>
-                        Kopier Client ID og Client Secret fra Google og lim inn her. Klikk Lagre.
+                        Kopier Client ID og Client Secret fra Google og lim inn her (ingen mellomrom i starten eller slutten). Klikk Lagre.
                       </li>
                     </ol>
                   </div>

@@ -89,14 +89,12 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     fetchGmailSync();
   }, [fetchGmailSync]);
 
-  // Auto-sync Gmail every 5 minutes when connected
+  // Refresh Gmail connection state (e.g. last_sync_at) periodically; do not auto-invoke sync
+  // to avoid extra Edge Function invocations. Sync is done by cron (~15 min) and manual "Sync now".
   useEffect(() => {
     if (!gmailSync || !currentTenantId) return;
-    const intervalMs = 5 * 60 * 1000;
-    const id = setInterval(async () => {
-      const result = await triggerGmailSync(currentTenantId);
-      if (result.success) await fetchGmailSync();
-    }, intervalMs);
+    const intervalMs = 15 * 60 * 1000;
+    const id = setInterval(() => fetchGmailSync(), intervalMs);
     return () => clearInterval(id);
   }, [gmailSync, currentTenantId, fetchGmailSync]);
 

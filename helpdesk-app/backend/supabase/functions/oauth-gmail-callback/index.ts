@@ -111,17 +111,28 @@ serve(async (req) => {
   if (!tokenRes.ok) {
     const errText = await tokenRes.text();
     let details = errText;
+    let message: string;
     try {
       const errJson = JSON.parse(errText) as { error?: string; error_description?: string };
       if (errJson.error || errJson.error_description) {
         details = [errJson.error, errJson.error_description].filter(Boolean).join(': ');
       }
+      if (errJson.error === 'unauthorized_client') {
+        message =
+          'Google godtar ikke denne OAuth-klienten. Sjekk: (1) I Google Cloud Console → APIer og tjenester → legitimasjon: at denne klientens «Autoriserte omdirigerings-URI-er» inneholder nøyaktig samme URL som appen bruker (f.eks. ' +
+          REDIRECT_URI +
+          '). (2) At klienttypen er «Nettapplikasjon». (3) At Client ID og Secret i innstillingene er for samme prosjekt og uten mellomrom. Detaljer: ' +
+          details;
+      } else if (details.includes('redirect_uri')) {
+        message =
+          'Omdirigerings-URI stemmer ikke. REDIRECT_URI i Edge Function må være nøyaktig lik i Google Console og i frontend (VITE_GOOGLE_REDIRECT_URI). Detaljer: ' +
+          details;
+      } else {
+        message = 'Token exchange failed: ' + details;
+      }
     } catch {
-      // keep raw errText
+      message = 'Token exchange failed: ' + details;
     }
-    const message = details.includes('redirect_uri') 
-      ? `Omdirigerings-URI stemmer ikke. Sjekk at REDIRECT_URI i Edge Function er nøyaktig lik i Google Console og i frontend. Detaljer: ${details}`
-      : `Token exchange failed: ${details}`;
     return new Response(JSON.stringify({ error: message, details: errText }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

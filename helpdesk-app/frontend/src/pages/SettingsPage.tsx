@@ -28,8 +28,8 @@ export function SettingsPage() {
   }
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="shrink-0 p-4 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)]">
+    <div className="flex flex-col h-full w-full">
+      <div className="shrink-0 w-full p-4 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)]">
         <h1 className="text-xl font-semibold text-[var(--hiver-text)]">Innstillinger</h1>
         <p className="text-sm text-[var(--hiver-text-muted)] mt-0.5">
           Selskap, team og svarmaler.

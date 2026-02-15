@@ -31,8 +31,8 @@ export function SettingsTabs({ currentRole, children }: SettingsTabsProps) {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)]">
+    <div className="flex flex-col h-full w-full">
+      <div className="w-full border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)]">
         <nav className="flex gap-1 px-2" aria-label="Innstillinger-faner">
           {TABS.map(({ id, label, icon: Icon, requiresAdmin }) => {
             const hidden = requiresAdmin && !canManageUsers(currentRole);
@@ -56,7 +56,7 @@ export function SettingsTabs({ currentRole, children }: SettingsTabsProps) {
           })}
         </nav>
       </div>
-      <div className="flex-1 overflow-auto p-6">{children}</div>
+      <div className="flex-1 overflow-auto p-6 w-full">{children}</div>
     </div>
   );
 }

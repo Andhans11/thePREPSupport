@@ -51,6 +51,7 @@ interface TeamMemberRow {
   role: Role;
   is_active: boolean;
   available_for_email?: boolean;
+  email_on_new_ticket?: boolean;
 }
 
 interface TeamOption {
@@ -88,7 +89,7 @@ export function UsersSettings() {
     if (!currentTenantId) return;
     setLoading(true);
     const [membersRes, teamsRes, memberTeamsRes] = await Promise.all([
-      supabase.from('team_members').select('id, user_id, name, email, role, is_active, available_for_email').eq('tenant_id', currentTenantId).order('name'),
+      supabase.from('team_members').select('id, user_id, name, email, role, is_active, available_for_email, email_on_new_ticket').eq('tenant_id', currentTenantId).order('name'),
       supabase.from('teams').select('id, name').eq('tenant_id', currentTenantId).order('name'),
       supabase.from('team_member_teams').select('team_member_id, team_id'),
     ]);
@@ -224,6 +225,26 @@ export function UsersSettings() {
     } else {
       setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, is_active } : m)));
       toast.success(is_active ? 'Bruker er aktivert' : 'Bruker er deaktivert');
+    }
+    setSaving(null);
+  };
+
+  const handleToggleEmailOnNewTicket = async (id: string, email_on_new_ticket: boolean) => {
+    if (!currentTenantId) return;
+    setSaving(id);
+    setError(null);
+    const { error: e } = await supabase
+      .from('team_members')
+      .update({ email_on_new_ticket })
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
+    if (e) {
+      setError(e.message);
+      toast.error(e.message);
+    } else {
+      setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, email_on_new_ticket } : m)));
+      setModalMember((prev) => (prev && prev.id === id ? { ...prev, email_on_new_ticket } : prev));
+      toast.success(email_on_new_ticket ? 'E-post ved ny sak er aktivert' : 'E-post ved ny sak er deaktivert');
     }
     setSaving(null);
   };
@@ -522,14 +543,27 @@ export function UsersSettings() {
                         <span className="text-xs px-2.5 py-1 rounded-lg bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)] font-medium">
                           {ROLE_LABELS[m.role]}
                         </span>
-                        <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                          <ToggleSwitch
-                            checked={m.is_active}
-                            onChange={(v) => handleToggleActive(m.id, v)}
-                            disabled={saving === m.id}
-                            label={m.is_active ? 'Deaktiver' : 'Aktiver'}
-                          />
-                          <span className="text-xs text-[var(--hiver-text-muted)] w-8">Aktiv</span>
+                        <div className="flex items-center gap-4" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center gap-2">
+                            <ToggleSwitch
+                              checked={m.is_active}
+                              onChange={(v) => handleToggleActive(m.id, v)}
+                              disabled={saving === m.id}
+                              label={m.is_active ? 'Deaktiver' : 'Aktiver'}
+                            />
+                            <span className="text-xs text-[var(--hiver-text-muted)] w-8">Aktiv</span>
+                          </div>
+                          {m.user_id && m.email && (
+                            <div className="flex items-center gap-2" title="Motta e-post når en ny sak opprettes">
+                              <ToggleSwitch
+                                checked={!!m.email_on_new_ticket}
+                                onChange={(v) => handleToggleEmailOnNewTicket(m.id, v)}
+                                disabled={saving === m.id}
+                                label={m.email_on_new_ticket ? 'Slå av e-post ved ny sak' : 'Slå på e-post ved ny sak'}
+                              />
+                              <span className="text-xs text-[var(--hiver-text-muted)] whitespace-nowrap">E-post ved ny sak</span>
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -633,6 +667,21 @@ export function UsersSettings() {
                   label="E-post"
                 />
               </div>
+
+              {modalMember.user_id && modalMember.email && (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
+                    <span className="text-sm font-medium text-[var(--hiver-text)]">E-post ved ny sak</span>
+                  </div>
+                  <ToggleSwitch
+                    checked={!!modalMember.email_on_new_ticket}
+                    onChange={(v) => handleToggleEmailOnNewTicket(modalMember.id, v)}
+                    disabled={saving === modalMember.id}
+                    label="Motta e-post når en ny sak opprettes"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block text-sm font-medium text-[var(--hiver-text-muted)] mb-2">Team</label>

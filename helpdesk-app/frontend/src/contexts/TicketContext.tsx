@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useRef, useSt
 import type { Ticket, TicketInsert, TicketUpdate } from '../types/ticket';
 import type { Message } from '../types/message';
 import { supabase } from '../services/supabase';
+import { notifyNewTicket } from '../services/api';
 import { useAuth } from './AuthContext';
 import { useTenant } from './TenantContext';
 
@@ -347,7 +348,9 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
     await fetchTickets();
-    return inserted as Ticket;
+    const ticket = inserted as Ticket;
+    notifyNewTicket(ticket.id, typeof window !== 'undefined' ? window.location.origin : undefined).catch(() => {});
+    return ticket;
   };
 
   const updateTicket = async (id: string, data: TicketUpdate) => {

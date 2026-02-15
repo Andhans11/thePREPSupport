@@ -153,6 +153,54 @@ export async function sendInvitationEmail(
   return { sent: json.sent === true, error: json.error ?? json.message };
 }
 
+/** Get signed URLs for ticket attachment paths (uses Edge Function with service role so private bucket works). */
+export async function signTicketAttachmentUrls(paths: string[]): Promise<{ urls: Record<string, string>; error?: string }> {
+  const { data, error: refreshError } = await supabase.auth.refreshSession();
+  const token = data.session?.access_token;
+  if (refreshError || !token) {
+    return { urls: {}, error: 'Ikke innlogget' };
+  }
+  const url = `${getSupabaseUrl()}/functions/v1/sign-ticket-attachment-urls`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      apikey: getSupabaseAnonKey(),
+    },
+    body: JSON.stringify({ paths }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { urls: {}, error: json.error || json.message || res.statusText };
+  }
+  return { urls: json.urls ?? {} };
+}
+
+/** Notify users who have "email on new ticket" enabled. Called after creating a ticket. */
+export async function notifyNewTicket(ticketId: string, appUrl?: string | null): Promise<{ success: boolean; sent?: number; error?: string }> {
+  const { data, error: refreshError } = await supabase.auth.refreshSession();
+  const token = data.session?.access_token;
+  if (refreshError || !token) {
+    return { success: false, error: 'Ikke innlogget' };
+  }
+  const url = `${getSupabaseUrl()}/functions/v1/send-new-ticket-notification`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      apikey: getSupabaseAnonKey(),
+    },
+    body: JSON.stringify({ ticket_id: ticketId, app_url: appUrl ?? undefined }),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    return { success: false, error: json.error || json.message || res.statusText };
+  }
+  return { success: true, sent: typeof json.sent === 'number' ? json.sent : 0 };
+}
+
 export async function disconnectGmail(tenantId?: string): Promise<{ success: boolean; error?: string }> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { success: false, error: 'Ikke innlogget' };

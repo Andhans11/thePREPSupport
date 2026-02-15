@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
@@ -44,12 +44,22 @@ interface TeamMemberForList {
   user_id: string | null;
   is_active: boolean;
   availability_status: string | null;
+  last_seen_at: string | null;
 }
 
-/** Display status: not logged in → Frakoblet, inactive → Borte, else DB availability_status. */
+/** Consider "no active session" if last_seen_at is older than this (ms). */
+const LAST_SEEN_OFFLINE_MS = 5 * 60 * 1000;
+
+/** Display status: not logged in → Frakoblet; no recent session → Frakoblet; inactive → Borte; else DB availability_status. */
 function getDisplayStatus(m: TeamMemberForList): AvailabilityStatus {
   if (m.user_id == null) return 'offline';
   if (!m.is_active) return 'away';
+  if (m.last_seen_at) {
+    const age = Date.now() - new Date(m.last_seen_at).getTime();
+    if (age > LAST_SEEN_OFFLINE_MS) return 'offline';
+  } else {
+    return 'offline';
+  }
   const s = m.availability_status;
   return s && ['active', 'away', 'busy', 'offline'].includes(s) ? (s as AvailabilityStatus) : 'active';
 }
@@ -223,6 +233,7 @@ export function DashboardPage() {
   const [planningSlotsNextWorkingDay, setPlanningSlotsNextWorkingDay] = useState<PlanningSlotOnDashboard[]>([]);
   const [nextWorkingDayLabel, setNextWorkingDayLabel] = useState<string>('');
   const [loading, setLoading] = useState(true);
+  const loadRef = useRef<(() => Promise<void>) | null>(null);
 
   useEffect(() => {
     if (!currentTenantId) {
@@ -235,6 +246,7 @@ export function DashboardPage() {
       setLoading(false);
       return;
     }
+    setLoading(true);
     async function load() {
       const [ticketsRes, membersRes] = await Promise.all([
         supabase
@@ -248,7 +260,7 @@ export function DashboardPage() {
           .limit(100),
         supabase
           .from('team_members')
-          .select('id, name, email, user_id, is_active, availability_status')
+          .select('id, name, email, user_id, is_active, availability_status, last_seen_at')
           .eq('tenant_id', currentTenantId),
       ]);
       const list = (ticketsRes.data ?? []) as TicketType[];
@@ -265,11 +277,12 @@ export function DashboardPage() {
       if (membersRes.error) {
         const fallback = await supabase
           .from('team_members')
-          .select('id, name, email, user_id, is_active')
+          .select('id, name, email, user_id, is_active, last_seen_at')
           .eq('tenant_id', currentTenantId);
         members = ((fallback.data ?? []) as TeamMemberForList[]).map((m) => ({
           ...m,
           availability_status: m.is_active && m.user_id ? 'active' : m.user_id ? 'away' : 'offline',
+          last_seen_at: (m as TeamMemberForList).last_seen_at ?? null,
         }));
       } else {
         members = (membersRes.data ?? []) as TeamMemberForList[];
@@ -403,8 +416,20 @@ export function DashboardPage() {
 
       setLoading(false);
     }
+    loadRef.current = load;
     load();
   }, [user?.id, statuses, currentTenantId]);
+
+  // Refetch when user returns to the tab so dashboard reflects current data
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && currentTenantId) {
+        loadRef.current?.();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [currentTenantId]);
 
   const statusDisplayConfig: Record<AvailabilityStatus, { Icon: typeof Check }> = {
     active: { Icon: Check },

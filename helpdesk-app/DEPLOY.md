@@ -93,6 +93,8 @@ npx supabase functions deploy oauth-gmail-callback
 npx supabase functions deploy send-gmail-reply
 npx supabase functions deploy send-gmail-forward
 npx supabase functions deploy send-invitation-email
+npx supabase functions deploy send-new-ticket-notification
+npx supabase functions deploy sign-ticket-attachment-urls
 npx supabase functions deploy sync-gmail-emails
 # Or deploy all: npx supabase functions deploy
 ```

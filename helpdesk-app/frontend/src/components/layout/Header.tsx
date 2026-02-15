@@ -75,9 +75,12 @@ export function Header() {
     offline: X,
   };
 
+  const availabilityStatusRef = useRef(availabilityStatus);
+  availabilityStatusRef.current = availabilityStatus;
+
   const INACTIVITY_AWAY_MS = 10 * 60 * 1000;
   useEffect(() => {
-    if (teamMemberId == null || availabilityStatus !== 'active') return;
+    if (teamMemberId == null) return;
     let timeoutId: ReturnType<typeof setTimeout>;
     const scheduleAway = () => {
       timeoutId = setTimeout(() => {
@@ -86,9 +89,12 @@ export function Header() {
     };
     const onActivity = () => {
       clearTimeout(timeoutId);
+      if (availabilityStatusRef.current === 'away') {
+        setAvailabilityStatus('active');
+      }
       scheduleAway();
     };
-    scheduleAway();
+    if (availabilityStatus === 'active') scheduleAway();
     window.addEventListener('mousemove', onActivity);
     window.addEventListener('keydown', onActivity);
     window.addEventListener('click', onActivity);

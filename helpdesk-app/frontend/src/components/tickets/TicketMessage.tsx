@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import type { Message, MessageAttachment } from '../../types/message';
 import { formatDateTime } from '../../utils/formatters';
 import { getMessageDisplayHtml } from '../../utils/sanitizeHtml';
-import { supabase } from '../../services/supabase';
+import { signTicketAttachmentUrls } from '../../services/api';
 import { Reply, ReplyAll, Forward, Paperclip, X } from 'lucide-react';
 
 interface TicketMessageProps {
@@ -90,7 +90,6 @@ export function TicketMessage({
   const [failedPaths, setFailedPaths] = useState<Set<string>>(new Set());
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
-  const blobUrlsRef = useRef<string[]>([]);
   const attachments = Array.isArray(message.attachments) ? message.attachments.filter(isMessageAttachment) : [];
   const imageAttachments = attachments.filter(isImageAttachment);
   const nonImageAttachments = attachments.filter((a) => !isImageAttachment(a));
@@ -111,26 +110,11 @@ export function TicketMessage({
   const attachmentPaths = attachments.map((a) => normalizeStoragePath(a.storage_path));
   const loadAttachmentUrls = useCallback(async () => {
     if (attachments.length === 0) return;
-    blobUrlsRef.current.forEach((url) => {
-      try { URL.revokeObjectURL(url); } catch { /* noop */ }
-    });
-    blobUrlsRef.current = [];
-    const next: Record<string, string> = {};
-    const failed = new Set<string>();
-    for (const a of attachments) {
-      const path = normalizeStoragePath(a.storage_path);
-      if (!path) continue;
-      const { data, error } = await supabase.storage.from('ticket-attachments').download(path);
-      if (error || !data) {
-        failed.add(path);
-        continue;
-      }
-      const blob = data as Blob;
-      const objectUrl = URL.createObjectURL(blob);
-      blobUrlsRef.current.push(objectUrl);
-      next[path] = objectUrl;
-    }
-    setSignedUrls((prev) => ({ ...prev, ...next }));
+    const paths = attachmentPaths.filter(Boolean);
+    if (paths.length === 0) return;
+    const { urls } = await signTicketAttachmentUrls(paths);
+    const failed = new Set(paths.filter((p) => !urls[p]));
+    setSignedUrls((prev) => ({ ...prev, ...urls }));
     setFailedPaths((prev) => {
       const nextSet = new Set(prev);
       attachmentPaths.forEach((p) => nextSet.delete(p));
@@ -150,14 +134,6 @@ export function TicketMessage({
     loadAttachmentUrls();
   }, [loadAttachmentUrls, retryCount]);
 
-  useEffect(() => {
-    return () => {
-      blobUrlsRef.current.forEach((url) => {
-        try { URL.revokeObjectURL(url); } catch { /* noop */ }
-      });
-      blobUrlsRef.current = [];
-    };
-  }, [message.id]);
   const isCustomer = message.is_customer;
   const isInternal = message.is_internal_note;
   const showActions = !isInternal && (onReply || onReplyAll || onForward);

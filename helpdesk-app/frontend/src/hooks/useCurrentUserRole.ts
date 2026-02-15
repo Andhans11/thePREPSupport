@@ -77,6 +77,21 @@ export function useCurrentUserRole(): {
     refetch();
   }, [refetch]);
 
+  const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
+  useEffect(() => {
+    if (!teamMemberId) return;
+    const tick = () => {
+      supabase
+        .from('team_members')
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq('id', teamMemberId)
+        .then(() => {});
+    };
+    tick();
+    const id = setInterval(tick, HEARTBEAT_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [teamMemberId]);
+
   const setAvailableForEmail = useCallback(
     async (v: boolean) => {
       if (!teamMemberId) return;

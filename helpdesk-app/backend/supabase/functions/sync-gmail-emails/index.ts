@@ -500,6 +500,23 @@ async function runSyncForGmailRow(
       }
     }
 
+    try {
+      const supabaseUrl = Deno.env.get('SUPABASE_URL')?.replace(/\/$/, '') ?? '';
+      const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+      if (supabaseUrl && serviceKey) {
+        await fetch(`${supabaseUrl}/functions/v1/send-new-ticket-notification`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${serviceKey}`,
+          },
+          body: JSON.stringify({ ticket_id: newTicket.id, tenant_id: tenantIdForData }),
+        });
+      }
+    } catch (e) {
+      console.error('Failed to send new-ticket notifications', e);
+    }
+
     created++;
   }
 

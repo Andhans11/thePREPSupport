@@ -34,7 +34,7 @@ This builds the frontend, commits any uncommitted changes, and pushes to GitHub.
    |--------------------------|--------------------------|--------------------------------|
    | `VITE_SUPABASE_URL`      | `https://xxx.supabase.co`| From Supabase → Settings → API |
    | `VITE_SUPABASE_ANON_KEY` | Your anon/public key     | Same place                     |
-   | `VITE_GOOGLE_CLIENT_ID`  | Your Google OAuth client ID | From Google Cloud Console  |
+   | `VITE_GOOGLE_CLIENT_ID`  | Your Google OAuth client ID | From Google Cloud Console. If omitted, the app runs but “Koble til Gmail-konto” is disabled and shows an explanation. |
    | `VITE_GOOGLE_REDIRECT_URI` | `https://your-app.vercel.app/oauth/callback` | Your Vercel URL + `/oauth/callback` |
 
 7. **Deploy.** After the first deploy, set `VITE_GOOGLE_REDIRECT_URI` to the real URL (e.g. `https://your-project.vercel.app/oauth/callback`) and redeploy if you changed it.

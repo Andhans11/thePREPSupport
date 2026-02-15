@@ -1,4 +1,4 @@
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID as string | undefined;
 const REDIRECT_URI = import.meta.env.VITE_GOOGLE_REDIRECT_URI || `${window.location.origin}/oauth/callback`;
 
 const SCOPES = [
@@ -7,12 +7,16 @@ const SCOPES = [
   'https://www.googleapis.com/auth/gmail.modify',
 ];
 
-export function getGmailAuthUrl(): string {
-  if (!GOOGLE_CLIENT_ID) {
-    throw new Error('VITE_GOOGLE_CLIENT_ID is not set');
-  }
+/** True if Google OAuth is configured (client ID set at build time). */
+export function isGmailOAuthConfigured(): boolean {
+  return !!GOOGLE_CLIENT_ID?.trim();
+}
+
+/** Returns the Gmail OAuth URL, or null if VITE_GOOGLE_CLIENT_ID is not set. */
+export function getGmailAuthUrl(): string | null {
+  if (!GOOGLE_CLIENT_ID?.trim()) return null;
   const params = new URLSearchParams({
-    client_id: GOOGLE_CLIENT_ID,
+    client_id: GOOGLE_CLIENT_ID.trim(),
     redirect_uri: REDIRECT_URI,
     response_type: 'code',
     scope: SCOPES.join(' '),

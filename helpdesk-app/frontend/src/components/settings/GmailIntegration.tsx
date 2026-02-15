@@ -18,6 +18,7 @@ export function GmailIntegration() {
     savingGroupEmail,
     error,
     connectGmail,
+    isGmailOAuthConfigured,
     syncNow,
     disconnect,
     updateGroupEmail,
@@ -156,6 +157,14 @@ export function GmailIntegration() {
         </div>
       ) : (
         <div className="mt-4">
+          {!isGmailOAuthConfigured && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+              <p className="font-medium">Google OAuth er ikke konfigurert</p>
+              <p className="mt-1 text-amber-700">
+                For å kunne koble til Gmail må <code className="bg-amber-100 px-1 rounded">VITE_GOOGLE_CLIENT_ID</code> være satt når frontend bygges (f.eks. i CI/CD eller på serveren). Be din administrator om å legge til variabelen og bygge frontend på nytt.
+              </p>
+            </div>
+          )}
           {cronLastRunAt && (
             <p className="text-xs text-[var(--hiver-text-muted)] mb-3">
               Siste sync kjørt fra db: {formatDateTime(cronLastRunAt)}
@@ -168,7 +177,8 @@ export function GmailIntegration() {
           <button
             type="button"
             onClick={connectGmail}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)]"
+            disabled={!isGmailOAuthConfigured}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)] disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Mail className="w-4 h-4" />
             Koble til Gmail-konto

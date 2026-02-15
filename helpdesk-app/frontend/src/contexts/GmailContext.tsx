@@ -1,6 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { supabase } from '../services/supabase';
-import { getGmailAuthUrl } from '../services/gmail';
+import { getGmailAuthUrl, isGmailOAuthConfigured } from '../services/gmail';
 import { exchangeOAuthCodeForTokens, triggerGmailSync, disconnectGmail } from '../services/api';
 import { useTenant } from './TenantContext';
 import { useToast } from './ToastContext';
@@ -26,6 +26,7 @@ interface GmailContextValue {
   savingGroupEmail: boolean;
   error: string | null;
   connectGmail: () => void;
+  isGmailOAuthConfigured: boolean;
   handleOAuthCallback: (code: string) => Promise<boolean>;
   syncNow: () => Promise<{ success: boolean; created?: number }>;
   disconnect: () => Promise<void>;
@@ -79,7 +80,12 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
 
   const connectGmail = () => {
     setError(null);
-    window.location.href = getGmailAuthUrl();
+    const url = getGmailAuthUrl();
+    if (!url) {
+      setError('Google OAuth er ikke konfigurert. Be din administrator om å sette VITE_GOOGLE_CLIENT_ID ved bygg av frontend.');
+      return;
+    }
+    window.location.href = url;
   };
 
   const handleOAuthCallback = useCallback(
@@ -144,6 +150,7 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     savingGroupEmail,
     error,
     connectGmail,
+    isGmailOAuthConfigured: isGmailOAuthConfigured(),
     handleOAuthCallback,
     syncNow,
     disconnect,

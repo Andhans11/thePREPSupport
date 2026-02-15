@@ -67,7 +67,12 @@ function extractMentionedUserIds(content: string): string[] {
   return ids;
 }
 
-export function TicketDetail() {
+interface TicketDetailProps {
+  /** When provided (e.g. in a modal), called when the user clicks the close (X) button before clearing selection */
+  onRequestClose?: () => void;
+}
+
+export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
   const { selectedTicket, messages, updateTicket, selectTicket, addMessage, fetchMessages } = useTickets();
   const { user } = useAuth();
   const toast = useToast();
@@ -280,7 +285,10 @@ export function TicketDetail() {
           </button>
           <button
             type="button"
-            onClick={() => selectTicket(null)}
+            onClick={() => {
+              onRequestClose?.();
+              selectTicket(null);
+            }}
             className="p-2 rounded-lg text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-text)]"
             aria-label="Lukk"
           >

@@ -5,7 +5,6 @@ import { useGmail } from '../../contexts/GmailContext';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
 import { useNotifications } from '../../hooks/useNotifications';
 import { formatDateTime } from '../../utils/formatters';
-import { supabase } from '../../services/supabase';
 import { getNotificationIcon } from '../../utils/notificationIcons';
 import { isAdmin, canAccessSettings } from '../../types/roles';
 import { AVAILABILITY_LABELS, AVAILABILITY_COLORS, type AvailabilityStatus } from '../../types/availability';
@@ -59,26 +58,9 @@ export function Header() {
   const notifRef = useRef<HTMLDivElement>(null);
 
   const { role, availableForEmail, setAvailableForEmail, availabilityStatus, setAvailabilityStatus, teamMemberId } = useCurrentUserRole();
-  const { syncNow, syncing } = useGmail();
+  const { lastSyncAt, syncNow, syncing } = useGmail();
   const { items: notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications({ unreadOnly: true });
   const admin = isAdmin(role);
-  const [lastSyncFromDb, setLastSyncFromDb] = useState<string | null>(null);
-
-  const fetchLastSyncFromDb = () => {
-    supabase
-      .from('gmail_sync_cron_last_run')
-      .select('last_run_at')
-      .eq('id', 1)
-      .maybeSingle()
-      .then(({ data }) => {
-        const row = data as { last_run_at?: string } | null;
-        setLastSyncFromDb(row?.last_run_at ?? null);
-      });
-  };
-
-  useEffect(() => {
-    fetchLastSyncFromDb();
-  }, []);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -135,16 +117,14 @@ export function Header() {
     <header className="h-14 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] flex items-center justify-between gap-4 px-4 shrink-0">
       <button
         type="button"
-        onClick={() => {
-          syncNow()?.then(() => fetchLastSyncFromDb());
-        }}
+        onClick={() => syncNow()}
         disabled={syncing}
         className="flex items-center gap-2 min-w-0 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--hiver-bg)] transition-colors disabled:opacity-70 disabled:cursor-wait"
         title="Synkroniser e-post på nytt"
       >
         <RefreshCw className={`w-4 h-4 text-[var(--hiver-text-muted)] shrink-0 ${syncing ? 'animate-spin' : ''}`} aria-hidden />
-        <span className="text-xs text-[var(--hiver-text-muted)] truncate" title={lastSyncFromDb ? formatDateTime(lastSyncFromDb) : undefined}>
-          {syncing ? 'Synkroniserer…' : lastSyncFromDb ? `Sist sync: ${formatDateTime(lastSyncFromDb)}` : 'Ingen sync ennå'}
+        <span className="text-xs text-[var(--hiver-text-muted)] truncate" title={lastSyncAt ? formatDateTime(lastSyncAt) : undefined}>
+          {syncing ? 'Synkroniserer…' : lastSyncAt ? `Sist sync: ${formatDateTime(lastSyncAt)}` : 'Ingen sync ennå'}
         </span>
       </button>
       <div className="flex items-center gap-2 shrink-0">

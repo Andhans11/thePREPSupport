@@ -3,6 +3,14 @@ import { supabase } from './supabase';
 const getSupabaseUrl = () => import.meta.env.VITE_SUPABASE_URL?.replace(/\/$/, '') || '';
 const getSupabaseAnonKey = () => import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
 
+/** Cache signed attachment URLs so reopening a ticket doesn't refetch. Signed URLs expire in 1h; we use 55 min TTL. */
+const ATTACHMENT_URL_CACHE_TTL_MS = 55 * 60 * 1000;
+const attachmentUrlCache = new Map<string, { url: string; expiresAt: number }>();
+
+function normalizePathForCache(p: string): string {
+  return String(p).trim().replace(/^\/+|\/+$/g, '');
+}
+
 export async function exchangeOAuthCodeForTokens(
   code: string,
   tenantId?: string,
@@ -153,35 +161,62 @@ export async function sendInvitationEmail(
   return { sent: json.sent === true, error: json.error ?? json.message };
 }
 
-/** Get signed URLs for ticket attachment paths. Uses current or refreshed session so the Edge Function receives a valid JWT. */
+/** Get signed URLs for ticket attachment paths. Uses in-memory cache so reopening a ticket doesn't refetch. */
 export async function signTicketAttachmentUrls(paths: string[]): Promise<{ urls: Record<string, string>; error?: string }> {
-  const { data: sessionData } = await supabase.auth.getSession();
-  let token = sessionData.session?.access_token;
-  if (!token) {
-    const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-    token = refreshData.session?.access_token;
-    if (refreshError || !token) {
-      return { urls: {}, error: 'Ikke innlogget' };
+  const now = Date.now();
+  const normalizedPaths = paths.map((p) => normalizePathForCache(p)).filter(Boolean);
+  const urls: Record<string, string> = {};
+  const toFetch: string[] = [];
+
+  for (const path of normalizedPaths) {
+    const entry = attachmentUrlCache.get(path);
+    if (entry && entry.expiresAt > now) {
+      urls[path] = entry.url;
+    } else {
+      if (entry) attachmentUrlCache.delete(path);
+      toFetch.push(path);
     }
   }
-  const url = `${getSupabaseUrl()}/functions/v1/sign-ticket-attachment-urls`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify({ paths }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const message = res.status === 401
-      ? (json.message || json.error || 'Sesjon utløpt. Logg inn på nytt.')
-      : (json.error || json.message || res.statusText);
-    return { urls: {}, error: message };
+
+  if (toFetch.length > 0) {
+    const { data: sessionData } = await supabase.auth.getSession();
+    let token = sessionData.session?.access_token;
+    if (!token) {
+      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+      token = refreshData.session?.access_token;
+      if (refreshError || !token) {
+        return { urls, error: 'Ikke innlogget' };
+      }
+    }
+    const url = `${getSupabaseUrl()}/functions/v1/sign-ticket-attachment-urls`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        apikey: getSupabaseAnonKey(),
+      },
+      body: JSON.stringify({ paths: toFetch }),
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const message = res.status === 401
+        ? (json.message || json.error || 'Sesjon utløpt. Logg inn på nytt.')
+        : (json.error || json.message || res.statusText);
+      return { urls, error: message };
+    }
+    const fresh = (json.urls ?? {}) as Record<string, string>;
+    const expiresAt = now + ATTACHMENT_URL_CACHE_TTL_MS;
+    for (const [path, signedUrl] of Object.entries(fresh)) {
+      if (signedUrl) {
+        const norm = normalizePathForCache(path);
+        urls[norm] = signedUrl;
+        attachmentUrlCache.set(norm, { url: signedUrl, expiresAt });
+      }
+    }
   }
-  return { urls: (json.urls ?? {}) as Record<string, string> };
+
+  return { urls };
 }
 
 /** Notify users who have "email on new ticket" enabled. Called after creating a ticket. */

@@ -155,26 +155,17 @@ export async function sendInvitationEmail(
 
 /** Get signed URLs for ticket attachment paths (uses Edge Function with service role so private bucket works). */
 export async function signTicketAttachmentUrls(paths: string[]): Promise<{ urls: Record<string, string>; error?: string }> {
-  const { data, error: refreshError } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (refreshError || !token) {
-    return { urls: {}, error: 'Ikke innlogget' };
-  }
-  const url = `${getSupabaseUrl()}/functions/v1/sign-ticket-attachment-urls`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify({ paths }),
+  const { data, error } = await supabase.functions.invoke('sign-ticket-attachment-urls', {
+    body: { paths },
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { urls: {}, error: json.error || json.message || res.statusText };
+  if (error) {
+    return { urls: {}, error: error.message || 'Kunne ikke hente vedlegg' };
   }
-  return { urls: json.urls ?? {} };
+  const body = data as { urls?: Record<string, string>; error?: string } | null;
+  if (body?.error) {
+    return { urls: {}, error: body.error };
+  }
+  return { urls: body?.urls ?? {} };
 }
 
 /** Notify users who have "email on new ticket" enabled. Called after creating a ticket. */

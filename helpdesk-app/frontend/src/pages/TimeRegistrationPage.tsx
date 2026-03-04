@@ -6,6 +6,8 @@ import {
   endOfWeek,
   startOfMonth,
   endOfMonth,
+  startOfDay,
+  endOfDay,
   addDays,
   addWeeks,
   subWeeks,
@@ -34,6 +36,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Settings,
+  Users,
+  ArrowLeft,
 } from 'lucide-react';
 import { supabase } from '../services/supabase';
 import { useTenant } from '../contexts/TenantContext';
@@ -133,6 +137,13 @@ interface TeamMemberOption {
   role: string;
 }
 
+interface PlanningSlot {
+  id: string;
+  team_member_id: string;
+  start_at: string;
+  end_at: string;
+}
+
 export function TimeRegistrationPage() {
   const { currentTenantId } = useTenant();
   const { role, teamMemberId } = useCurrentUserRole();
@@ -147,6 +158,7 @@ export function TimeRegistrationPage() {
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [members, setMembers] = useState<TeamMemberOption[]>([]);
   const [approverIds, setApproverIds] = useState<Set<string>>(new Set());
+  const [planningSlots, setPlanningSlots] = useState<PlanningSlot[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [weekStart, setWeekStart] = useState(() => startOfWeek(new Date(), { weekStartsOn: 1 }));
@@ -170,6 +182,23 @@ export function TimeRegistrationPage() {
   const [rejectComment, setRejectComment] = useState('');
   const [approvalActionLoading, setApprovalActionLoading] = useState(false);
 
+  /** Main tab: mine = own registrations; employees = list of employees (admin/manager only). */
+  const [mainTab, setMainTab] = useState<'mine' | 'employees'>('mine');
+  /** When on employees tab: selected employee to view their registrations (null = show list). */
+  const [employeesTabSelectedId, setEmployeesTabSelectedId] = useState<string | null>(null);
+  /** For managers: set of team_member_id in teams they manage. */
+  const [managedTeamMemberIds, setManagedTeamMemberIds] = useState<Set<string> | null>(null);
+  /** Search filter in employees tab list. */
+  const [employeesSearch, setEmployeesSearch] = useState('');
+  /** Period approval (when viewing one employee): type and date. */
+  const [approvalPeriodType, setApprovalPeriodType] = useState<'day' | 'week' | 'month'>('week');
+  const [approvalPeriodDate, setApprovalPeriodDate] = useState(() => format(new Date(), 'yyyy-MM-dd'));
+  const [approvalPeriodRejectModal, setApprovalPeriodRejectModal] = useState(false);
+  const [approvalPeriodRejectComment, setApprovalPeriodRejectComment] = useState('');
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  /** On Medarbeider timegodkjenning when viewing one employee: list (default) or calendar. */
+  const [employeeApprovalDisplayMode, setEmployeeApprovalDisplayMode] = useState<'list' | 'calendar'>('list');
+
   const weekGridRef = useRef<HTMLDivElement>(null);
   const weekDragRef = useRef<{ dayIndex: number; segIndex: number } | null>(null);
   const [weekSelection, setWeekSelection] = useState<{ dayIndex: number; segStart: number; segEnd: number } | null>(null);
@@ -182,13 +211,14 @@ export function TimeRegistrationPage() {
     if (!currentTenantId) return;
     setLoading(true);
     try {
-      const [workRes, projRes, absRes, entriesRes, membersRes, approversRes] = await Promise.all([
+      const [workRes, projRes, absRes, entriesRes, membersRes, approversRes, slotsRes] = await Promise.all([
         supabase.from('time_registration_work_types').select('*').eq('tenant_id', currentTenantId).order('sort_order'),
         supabase.from('time_registration_projects').select('*').eq('tenant_id', currentTenantId),
         supabase.from('time_registration_absence_types').select('*').eq('tenant_id', currentTenantId).order('sort_order'),
         supabase.from('time_entries').select('*').eq('tenant_id', currentTenantId).order('entry_date', { ascending: false }),
         supabase.from('team_members').select('id, name, email, role').eq('tenant_id', currentTenantId).eq('is_active', true),
         supabase.from('time_registration_approvers').select('team_member_id').eq('tenant_id', currentTenantId),
+        supabase.from('planning_slots').select('id, team_member_id, start_at, end_at').eq('tenant_id', currentTenantId),
       ]);
       if (workRes.data) setWorkTypes(workRes.data as WorkType[]);
       if (projRes.data) setProjects(projRes.data as Project[]);
@@ -196,6 +226,7 @@ export function TimeRegistrationPage() {
       if (entriesRes.data) setEntries(entriesRes.data as TimeEntry[]);
       if (membersRes.data) setMembers(membersRes.data as TeamMemberOption[]);
       if (approversRes.data) setApproverIds(new Set((approversRes.data as { team_member_id: string }[]).map((r) => r.team_member_id)));
+      if (slotsRes.data) setPlanningSlots(slotsRes.data as PlanningSlot[]);
     } catch (e) {
       toast.error('Kunne ikke laste timeregistrering.');
     } finally {
@@ -206,6 +237,34 @@ export function TimeRegistrationPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  /** For managers: fetch team_member_ids in teams they manage. */
+  const fetchManagedTeamMemberIds = useCallback(async () => {
+    if (!currentTenantId || !teamMemberId || role !== 'manager') {
+      setManagedTeamMemberIds(null);
+      return;
+    }
+    const { data: teamsData } = await supabase
+      .from('teams')
+      .select('id')
+      .eq('tenant_id', currentTenantId)
+      .eq('manager_team_member_id', teamMemberId);
+    const teamIds = (teamsData ?? []).map((t: { id: string }) => t.id);
+    if (teamIds.length === 0) {
+      setManagedTeamMemberIds(new Set());
+      return;
+    }
+    const { data: tmtData } = await supabase
+      .from('team_member_teams')
+      .select('team_member_id')
+      .in('team_id', teamIds);
+    const ids = new Set((tmtData ?? []).map((r: { team_member_id: string }) => r.team_member_id));
+    setManagedTeamMemberIds(ids);
+  }, [currentTenantId, teamMemberId, role]);
+
+  useEffect(() => {
+    fetchManagedTeamMemberIds();
+  }, [fetchManagedTeamMemberIds]);
 
   const openAdd = (date?: string, startTime?: string, initialHoursMinutes?: { hours: number; minutes: number }) => {
     setEditingEntry(null);
@@ -389,6 +448,60 @@ export function TimeRegistrationPage() {
     }
   };
 
+  const handleApproveMany = async (entriesToApprove: TimeEntry[]) => {
+    if (!teamMemberId || entriesToApprove.length === 0) return;
+    setBulkActionLoading(true);
+    try {
+      let ok = 0;
+      for (const entry of entriesToApprove) {
+        const { error } = await supabase
+          .from('time_entries')
+          .update({
+            status: 'approved',
+            approved_by: teamMemberId,
+            approved_at: new Date().toISOString(),
+            rejection_comment: null,
+          })
+          .eq('id', entry.id);
+        if (!error) ok++;
+      }
+      toast.success(`${ok} registrering${ok === 1 ? '' : 'er'} godkjent.`);
+      fetchData();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Kunne ikke godkjenne.');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
+  const handleRejectMany = async (entriesToReject: TimeEntry[], comment: string) => {
+    if (!teamMemberId || entriesToReject.length === 0) return;
+    setBulkActionLoading(true);
+    try {
+      let ok = 0;
+      for (const entry of entriesToReject) {
+        const { error } = await supabase
+          .from('time_entries')
+          .update({
+            status: 'rejected',
+            approved_by: teamMemberId,
+            approved_at: new Date().toISOString(),
+            rejection_comment: comment.trim() || null,
+          })
+          .eq('id', entry.id);
+        if (!error) ok++;
+      }
+      toast.success(`${ok} registrering${ok === 1 ? '' : 'er'} avvist.`);
+      setApprovalPeriodRejectModal(false);
+      setApprovalPeriodRejectComment('');
+      fetchData();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : 'Kunne ikke avvise.');
+    } finally {
+      setBulkActionLoading(false);
+    }
+  };
+
   const handleDelete = async (entry: TimeEntry) => {
     if (entry.status !== 'draft') return;
     if (!confirm('Slette denne timeregistreringen?')) return;
@@ -403,10 +516,96 @@ export function TimeRegistrationPage() {
 
   const weekDates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
   const weekDateStrs = weekDates.map((d) => format(d, 'yyyy-MM-dd'));
+
+  const isEmployeeCalendar = mainTab === 'employees' && employeesTabSelectedId && employeeApprovalDisplayMode === 'calendar';
+  const isEmployeeCalendarWeekOrDay = isEmployeeCalendar && (approvalPeriodType === 'day' || approvalPeriodType === 'week');
+  const isEmployeeCalendarMonth = isEmployeeCalendar && approvalPeriodType === 'month';
+  const effectiveWeekStart = isEmployeeCalendarWeekOrDay
+    ? approvalPeriodType === 'day'
+      ? parseISO(approvalPeriodDate)
+      : startOfWeek(parseISO(approvalPeriodDate), { weekStartsOn: 1 })
+    : weekStart;
+  const effectiveWeekDates = isEmployeeCalendarWeekOrDay
+    ? approvalPeriodType === 'day'
+      ? [parseISO(approvalPeriodDate)]
+      : Array.from({ length: 7 }, (_, i) => addDays(effectiveWeekStart, i))
+    : weekDates;
+  const effectiveWeekDateStrs = effectiveWeekDates.map((d) => format(d, 'yyyy-MM-dd'));
+  const effectiveMonthStart = isEmployeeCalendarMonth ? startOfMonth(parseISO(approvalPeriodDate)) : monthStart;
+  const weekDatesForGrid = isEmployeeCalendarWeekOrDay ? effectiveWeekDates : weekDates;
   const myEntries = entries.filter((e) => e.team_member_id === teamMemberId);
-  /** Admins see all entries in list/week/month; others see only their own. */
-  const displayEntries = isAdmin(role) ? entries : myEntries;
+  /** Mine tab: always own. Employees tab with someone selected: that person's entries. */
+  const displayEntries =
+    mainTab === 'mine'
+      ? myEntries
+      : mainTab === 'employees' && employeesTabSelectedId
+        ? entries.filter((e) => e.team_member_id === employeesTabSelectedId)
+        : [];
   const submittedPending = entries.filter((e) => e.status === 'submitted');
+  /** Pending entries in approval tab: all pending the current user can approve. */
+  const submittedPendingDisplay = (() => {
+    if (!isApprover) return submittedPending;
+    if (isAdmin(role)) return submittedPending;
+    return managedTeamMemberIds ? submittedPending.filter((e) => managedTeamMemberIds.has(e.team_member_id)) : submittedPending;
+  })();
+  /** Employees tab: admin = all members, manager = their team. */
+  const membersForEmployeesTab = isAdmin(role)
+    ? members
+    : managedTeamMemberIds
+      ? members.filter((m) => managedTeamMemberIds.has(m.id))
+      : [];
+  const employeesSearchLower = employeesSearch.trim().toLowerCase();
+  const employeesFiltered =
+    !employeesSearchLower
+      ? membersForEmployeesTab
+      : membersForEmployeesTab.filter(
+          (m) =>
+            (m.name ?? '').toLowerCase().includes(employeesSearchLower) ||
+            (m.email ?? '').toLowerCase().includes(employeesSearchLower)
+        );
+
+  /** Period range for bulk approval (day / week / month). Use full-day boundaries so planning slots overlap correctly. */
+  const approvalPeriodRange = useMemo(() => {
+    const d = parseISO(approvalPeriodDate);
+    if (approvalPeriodType === 'day') return { start: startOfDay(d), end: endOfDay(d) };
+    if (approvalPeriodType === 'week') {
+      const start = startOfWeek(d, { weekStartsOn: 1 });
+      return { start, end: endOfWeek(d, { weekStartsOn: 1 }) };
+    }
+    const start = startOfMonth(d);
+    return { start, end: endOfMonth(d) };
+  }, [approvalPeriodDate, approvalPeriodType]);
+
+  /** All entries in the selected period (any status) – so we can show them with status. */
+  const entriesInApprovalPeriod =
+    mainTab === 'employees' && employeesTabSelectedId
+      ? displayEntries.filter((e) =>
+          isWithinInterval(parseISO(e.entry_date), { start: approvalPeriodRange.start, end: approvalPeriodRange.end })
+        )
+      : [];
+
+  /** Submitted (pending approval) entries in the selected period. */
+  const pendingInApprovalPeriod = entriesInApprovalPeriod.filter((e) => e.status === 'submitted');
+
+  /** Hours summary for the approval period: planned (planning_slots), work (time_entries work), absence (time_entries absence). */
+  const periodHoursSummary = useMemo(() => {
+    if (mainTab !== 'employees' || !employeesTabSelectedId) return { planned: 0, work: 0, absence: 0 };
+    const work = entriesInApprovalPeriod.filter((e) => e.entry_type === 'work').reduce((s, e) => s + e.hours, 0);
+    const absence = entriesInApprovalPeriod.filter((e) => e.entry_type === 'absence').reduce((s, e) => s + e.hours, 0);
+    const periodStart = approvalPeriodRange.start.getTime();
+    const periodEnd = approvalPeriodRange.end.getTime();
+    let planned = 0;
+    for (const slot of planningSlots) {
+      if (slot.team_member_id !== employeesTabSelectedId) continue;
+      const slotStart = new Date(slot.start_at).getTime();
+      const slotEnd = new Date(slot.end_at).getTime();
+      const overlapStart = Math.max(slotStart, periodStart);
+      const overlapEnd = Math.min(slotEnd, periodEnd);
+      if (overlapEnd > overlapStart) planned += (overlapEnd - overlapStart) / (1000 * 60 * 60);
+    }
+    return { planned: Math.round(planned * 100) / 100, work, absence };
+  }, [mainTab, employeesTabSelectedId, entriesInApprovalPeriod, approvalPeriodRange, planningSlots]);
+
   const draftInWeek = myEntries.filter((e) => e.status === 'draft' && weekDateStrs.includes(e.entry_date));
   const draftInMonth = myEntries.filter((e) => {
     if (e.status !== 'draft') return false;
@@ -473,12 +672,12 @@ export function TimeRegistrationPage() {
       weekDragRef.current = null;
       setWeekSelection(null);
       if (!finalSelection) return;
-      const dateStr = format(weekDates[finalSelection.dayIndex], 'yyyy-MM-dd');
+      const dateStr = format(weekDatesForGrid[finalSelection.dayIndex], 'yyyy-MM-dd');
       const startTimeLabel = segmentIndexToTimeLabel(finalSelection.segStart);
       const { hours, minutes } = selectionToHoursMinutes(finalSelection.segStart, finalSelection.segEnd);
       openAdd(dateStr, startTimeLabel, { hours, minutes });
     },
-    [getWeekCellFromEvent, weekDates, segmentIndexToTimeLabel, selectionToHoursMinutes]
+    [getWeekCellFromEvent, weekDatesForGrid, segmentIndexToTimeLabel, selectionToHoursMinutes]
   );
 
   useEffect(() => {
@@ -516,7 +715,7 @@ export function TimeRegistrationPage() {
   /** Segment index in week grid (0 = 07:00); clamp to valid range */
   const entryToWeekBlock = (entry: TimeEntry): { dayIndex: number; segStart: number; heightPx: number } | null => {
     const dateStr = entry.entry_date;
-    const dayIndex = weekDates.findIndex((d) => format(d, 'yyyy-MM-dd') === dateStr);
+    const dayIndex = weekDatesForGrid.findIndex((d) => format(d, 'yyyy-MM-dd') === dateStr);
     if (dayIndex < 0) return null;
     const startMins = getEntryStartMinutes(entry);
     const gridStartMins = WEEK_FIRST_HOUR * 60;
@@ -551,14 +750,16 @@ export function TimeRegistrationPage() {
           <h1 className="text-2xl font-semibold text-[var(--hiver-text)]">Timeregistrering</h1>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => openAdd()}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)]"
-          >
-            <Plus className="w-4 h-4" />
-            Ny registrering
-          </button>
+          {!(mainTab === 'employees' && employeesTabSelectedId) && (
+            <button
+              type="button"
+              onClick={() => openAdd()}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--hiver-accent)] text-white text-sm font-medium hover:bg-[var(--hiver-accent-hover)]"
+            >
+              <Plus className="w-4 h-4" />
+              Ny registrering
+            </button>
+          )}
           {isApprover && submittedPending.length > 0 && (
             <button
               type="button"
@@ -575,60 +776,276 @@ export function TimeRegistrationPage() {
         Registrer arbeidstimer og fravær (syk, sykt barn, permisjon, velferdspermisjon). Send inn for godkjenning.
       </p>
 
-      {/* Summary: timer denne uken / denne måneden */}
-      <div className="flex flex-wrap items-center gap-6 mb-6 p-4 rounded-xl bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)]">
-        <div>
-          <span className="text-sm text-[var(--hiver-text-muted)]">Denne uken</span>
-          <p className="text-xl font-semibold text-[var(--hiver-text)]">{formatHours(hoursThisWeek)} t</p>
+      {/* Summary: timer denne uken / denne måneden (only on Mine tab) */}
+      {mainTab === 'mine' && (
+        <div className="flex flex-wrap items-center gap-6 mb-6 p-4 rounded-xl bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)]">
+          <div>
+            <span className="text-sm text-[var(--hiver-text-muted)]">Denne uken</span>
+            <p className="text-xl font-semibold text-[var(--hiver-text)]">{formatHours(hoursThisWeek)} t</p>
+          </div>
+          <div>
+            <span className="text-sm text-[var(--hiver-text-muted)]">Denne måneden</span>
+            <p className="text-xl font-semibold text-[var(--hiver-text)]">{formatHours(hoursThisMonth)} t</p>
+          </div>
+          {isAdmin(role) && (
+            <Link
+              to="/settings?tab=time_registration"
+              className="ml-auto flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--hiver-border)] text-sm font-medium text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]"
+            >
+              <Settings className="w-4 h-4" />
+              Innstillinger for timeregistrering
+            </Link>
+          )}
         </div>
-        <div>
-          <span className="text-sm text-[var(--hiver-text-muted)]">Denne måneden</span>
-          <p className="text-xl font-semibold text-[var(--hiver-text)]">{formatHours(hoursThisMonth)} t</p>
-        </div>
-        {isAdmin(role) && (
-          <Link
-            to="/settings?tab=time_registration"
-            className="ml-auto flex items-center gap-2 px-3 py-2 rounded-lg border border-[var(--hiver-border)] text-sm font-medium text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]"
+      )}
+
+      {/* Top-level tabs: Mine (own) | Medarbeider timegodkjenning (admin/manager only) */}
+      <div className="flex flex-wrap items-center gap-2 mb-6">
+        <div className="flex gap-1 p-1 rounded-lg bg-[var(--hiver-bg)] border border-[var(--hiver-border)]">
+          <button
+            type="button"
+            onClick={() => { setMainTab('mine'); setApprovalTab(false); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              mainTab === 'mine' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+            }`}
           >
-            <Settings className="w-4 h-4" />
-            Innstillinger for timeregistrering
-          </Link>
-        )}
+            <Clock className="w-4 h-4" />
+            Mine registreringer
+          </button>
+          {isApprover && (role === 'admin' || role === 'manager') && (
+            <button
+              type="button"
+              onClick={() => { setMainTab('employees'); setApprovalTab(false); setEmployeesTabSelectedId(null); }}
+              className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+                mainTab === 'employees' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              Medarbeider timegodkjenning
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Tabs: Liste | Uke | Måned */}
-      <div className="flex gap-1 p-1 rounded-lg bg-[var(--hiver-bg)] border border-[var(--hiver-border)] w-fit mb-6">
-        <button
-          type="button"
-          onClick={() => { setApprovalTab(false); setView('list'); }}
-          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            view === 'list' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
-          }`}
-        >
-          <List className="w-4 h-4" />
-          Liste
-        </button>
-        <button
-          type="button"
-          onClick={() => { setApprovalTab(false); setView('week'); }}
-          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            view === 'week' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
-          }`}
-        >
-          <Calendar className="w-4 h-4" />
-          Uke
-        </button>
-        <button
-          type="button"
-          onClick={() => { setApprovalTab(false); setView('month'); }}
-          className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
-            view === 'month' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
-          }`}
-        >
-          <Calendar className="w-4 h-4" />
-          Måned
-        </button>
-      </div>
+      {/* Sub-tabs: Mine = Liste | Uke | Måned; Medarbeider (one employee) = List | Calendar */}
+      {mainTab === 'mine' && (
+        <div className="flex gap-1 p-1 rounded-lg bg-[var(--hiver-bg)] border border-[var(--hiver-border)] w-fit mb-6">
+          <button
+            type="button"
+            onClick={() => { setApprovalTab(false); setView('list'); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              view === 'list' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+            }`}
+          >
+            <List className="w-4 h-4" />
+            Liste
+          </button>
+          <button
+            type="button"
+            onClick={() => { setApprovalTab(false); setView('week'); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              view === 'week' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+            }`}
+          >
+            <Calendar className="w-4 h-4" />
+            Uke
+          </button>
+          <button
+            type="button"
+            onClick={() => { setApprovalTab(false); setView('month'); }}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              view === 'month' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+            }`}
+          >
+            <Calendar className="w-4 h-4" />
+            Måned
+          </button>
+        </div>
+      )}
+      {mainTab === 'employees' && employeesTabSelectedId && (
+        <div className="flex gap-1 p-1 rounded-lg bg-[var(--hiver-bg)] border border-[var(--hiver-border)] w-fit mb-6">
+          <button
+            type="button"
+            onClick={() => setEmployeeApprovalDisplayMode('list')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              employeeApprovalDisplayMode === 'list' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+            }`}
+          >
+            <List className="w-4 h-4" />
+            Liste
+          </button>
+          <button
+            type="button"
+            onClick={() => setEmployeeApprovalDisplayMode('calendar')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              employeeApprovalDisplayMode === 'calendar' ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm' : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+            }`}
+            title="Kalender (dag/uke/måned følger perioden over)"
+          >
+            <Calendar className="w-4 h-4" />
+            Kalender
+          </button>
+        </div>
+      )}
+
+      {/* When viewing one employee's registrations: back link */}
+      {mainTab === 'employees' && employeesTabSelectedId && (
+        <div className="mb-4 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setEmployeesTabSelectedId(null)}
+            className="inline-flex items-center gap-2 text-sm font-medium text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Tilbake til medarbeidere
+          </button>
+          <span className="text-sm text-[var(--hiver-text-muted)]">
+            Registreringer for <strong className="text-[var(--hiver-text)]">{getMemberName(employeesTabSelectedId)}</strong>
+          </span>
+        </div>
+      )}
+
+      {/* Godkjenn etter periode: day / week / month (when viewing one employee) */}
+      {mainTab === 'employees' && employeesTabSelectedId && (
+        <div className="card-panel p-6 mb-6">
+          <h3 className="text-base font-semibold text-[var(--hiver-text)] mb-3">Godkjenn etter periode</h3>
+          <p className="text-sm text-[var(--hiver-text-muted)] mb-4">
+            Velg dag, uke eller måned og godkjenn eller avvis alle innsendte registreringer i perioden.
+          </p>
+          {/* Period hours summary: planned, registered work, absence */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4 p-4 rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-bg)]/50">
+            <div>
+              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Planlagt</p>
+              <p className="text-lg font-semibold text-[var(--hiver-text)]">{formatHours(periodHoursSummary.planned)} t</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Registrert arbeid</p>
+              <p className="text-lg font-semibold text-[var(--hiver-accent)]">{formatHours(periodHoursSummary.work)} t</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Fravær</p>
+              <p className="text-lg font-semibold text-amber-600">{formatHours(periodHoursSummary.absence)} t</p>
+            </div>
+            <div>
+              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wide">Total registrert</p>
+              <p className="text-lg font-semibold text-[var(--hiver-text)]">
+                {formatHours(periodHoursSummary.work + periodHoursSummary.absence)} t
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-end gap-4 mb-4">
+            <div className="flex gap-1 p-1 rounded-lg bg-[var(--hiver-bg)] border border-[var(--hiver-border)]">
+              {(['day', 'week', 'month'] as const).map((type) => (
+                <button
+                  key={type}
+                  type="button"
+                  onClick={() => setApprovalPeriodType(type)}
+                  className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                    approvalPeriodType === type
+                      ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-accent)] shadow-sm'
+                      : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+                  }`}
+                >
+                  {type === 'day' ? 'Dag' : type === 'week' ? 'Uke' : 'Måned'}
+                </button>
+              ))}
+            </div>
+            <div>
+              <label htmlFor="approval-period-date" className="block text-xs font-medium text-[var(--hiver-text-muted)] mb-1">
+                {approvalPeriodType === 'day' ? 'Dato' : approvalPeriodType === 'week' ? 'Dato i uken' : 'Måned'}
+              </label>
+              {approvalPeriodType === 'month' ? (
+                <input
+                  id="approval-period-date"
+                  type="month"
+                  value={approvalPeriodDate.slice(0, 7)}
+                  onChange={(e) => setApprovalPeriodDate(e.target.value ? `${e.target.value}-01` : format(new Date(), 'yyyy-MM-dd'))}
+                  className="rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
+                />
+              ) : (
+                <input
+                  id="approval-period-date"
+                  type="date"
+                  value={approvalPeriodDate}
+                  onChange={(e) => setApprovalPeriodDate(e.target.value)}
+                  className="rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
+                />
+              )}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 py-3 px-4 rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-bg)]/50">
+            <span className="text-sm text-[var(--hiver-text-muted)]">
+              {approvalPeriodType === 'day' && format(parseISO(approvalPeriodDate), 'd. MMMM yyyy', { locale: nb })}
+              {approvalPeriodType === 'week' &&
+                `${format(approvalPeriodRange.start, 'd. MMM', { locale: nb })} – ${format(approvalPeriodRange.end, 'd. MMM yyyy', { locale: nb })}`}
+              {approvalPeriodType === 'month' && format(approvalPeriodRange.start, 'MMMM yyyy', { locale: nb })}
+              {pendingInApprovalPeriod.length > 0 && (
+                <span className="ml-2 font-medium text-[var(--hiver-text)]">
+                  · {pendingInApprovalPeriod.length} innsendt til godkjenning
+                </span>
+              )}
+            </span>
+            {pendingInApprovalPeriod.length > 0 && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleApproveMany(pendingInApprovalPeriod)}
+                  disabled={bulkActionLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                >
+                  {bulkActionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                  Godkjenn alle i perioden ({pendingInApprovalPeriod.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setApprovalPeriodRejectModal(true)}
+                  disabled={bulkActionLoading}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium border border-red-600 text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  <Ban className="w-4 h-4" />
+                  Avvis alle
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal: avvis alle i perioden (with comment) */}
+      {approvalPeriodRejectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" role="dialog" aria-modal="true" aria-labelledby="reject-period-title">
+          <div className="bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] rounded-xl shadow-xl max-w-md w-full p-6 space-y-4">
+            <h3 id="reject-period-title" className="text-lg font-semibold text-[var(--hiver-text)]">Avvis alle i perioden</h3>
+            <p className="text-sm text-[var(--hiver-text-muted)]">
+              {pendingInApprovalPeriod.length} registreringer vil bli avvist. Valgfri kommentar (vises for medarbeider):
+            </p>
+            <textarea
+              value={approvalPeriodRejectComment}
+              onChange={(e) => setApprovalPeriodRejectComment(e.target.value)}
+              placeholder="F.eks. grunn til avvisning…"
+              rows={3}
+              className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { setApprovalPeriodRejectModal(false); setApprovalPeriodRejectComment(''); }}
+                className="px-3 py-2 rounded-lg border border-[var(--hiver-border)] text-sm font-medium text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]"
+              >
+                Avbryt
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRejectMany(pendingInApprovalPeriod, approvalPeriodRejectComment)}
+                disabled={bulkActionLoading}
+                className="px-3 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+              >
+                {bulkActionLoading ? 'Avviser…' : `Avvis alle (${pendingInApprovalPeriod.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {loading ? (
         <div className="flex items-center justify-center py-12 text-[var(--hiver-text-muted)]">
@@ -638,11 +1055,11 @@ export function TimeRegistrationPage() {
         /* Godkjenninger */
         <div className="card-panel p-6">
           <h2 className="text-lg font-semibold text-[var(--hiver-text)] mb-4">Venter på godkjenning</h2>
-          {submittedPending.length === 0 ? (
+          {submittedPendingDisplay.length === 0 ? (
             <p className="text-sm text-[var(--hiver-text-muted)]">Ingen registreringer venter på godkjenning.</p>
           ) : (
             <ul className="space-y-3">
-              {submittedPending.map((entry) => (
+              {submittedPendingDisplay.map((entry) => (
                 <li
                   key={entry.id}
                   className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-bg)]"
@@ -699,22 +1116,145 @@ export function TimeRegistrationPage() {
             </ul>
           )}
         </div>
-      ) : view === 'week' ? (
-        /* Ukevisning med tidsluker */
+      ) : mainTab === 'employees' && !employeesTabSelectedId ? (
+        /* Medarbeider timegodkjenning: list of employees (admin = all, manager = team); click to view their registrations */
+        <div className="card-panel p-6">
+          <h2 className="text-lg font-semibold text-[var(--hiver-text)] mb-4">Medarbeider timegodkjenning</h2>
+          <p className="text-sm text-[var(--hiver-text-muted)] mb-4">
+            Velg en medarbeider for å se og godkjenne deres timeregistreringer.
+          </p>
+          {membersForEmployeesTab.length === 0 ? (
+            <p className="text-sm text-[var(--hiver-text-muted)]">
+              {role === 'manager'
+                ? 'Du er ikke satt som leder for noe team, eller teamene har ingen medlemmer. Gå til Innstillinger → Team.'
+                : 'Ingen medarbeidere.'}
+            </p>
+          ) : (
+            <>
+              {membersForEmployeesTab.length > 6 && (
+                <div className="mb-4">
+                  <input
+                    type="search"
+                    value={employeesSearch}
+                    onChange={(e) => setEmployeesSearch(e.target.value)}
+                    placeholder="Søk på navn eller e-post…"
+                    className="w-full max-w-sm rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
+                    aria-label="Søk medarbeidere"
+                  />
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                {employeesFiltered.map((member) => {
+                  const memberEntries = entries.filter((e) => e.team_member_id === member.id);
+                  const pending = memberEntries.filter((e) => e.status === 'submitted').length;
+                  const totalHours = memberEntries.reduce((s, e) => s + e.hours, 0);
+                  return (
+                    <button
+                      key={member.id}
+                      type="button"
+                      onClick={() => { setEmployeesTabSelectedId(member.id); setEmployeeApprovalDisplayMode('list'); }}
+                      className="text-left p-4 rounded-xl border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] hover:border-[var(--hiver-accent)]/50 hover:shadow-md transition-all"
+                    >
+                      <p className="font-medium text-[var(--hiver-text)] truncate">{member.name || member.email || '—'}</p>
+                      {member.email && member.name && (
+                        <p className="text-xs text-[var(--hiver-text-muted)] truncate mt-0.5">{member.email}</p>
+                      )}
+                      <div className="flex flex-wrap gap-2 mt-3 text-xs text-[var(--hiver-text-muted)]">
+                        <span>{formatHours(totalHours)} t totalt</span>
+                        {pending > 0 && (
+                          <span className="text-amber-600 font-medium">{pending} venter godkjenning</span>
+                        )}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {employeesFiltered.length === 0 && employeesSearchLower && (
+                <p className="text-sm text-[var(--hiver-text-muted)] mt-4">Ingen medarbeidere matcher søket.</p>
+              )}
+            </>
+          )}
+        </div>
+      ) : mainTab === 'employees' && employeesTabSelectedId && employeeApprovalDisplayMode === 'list' ? (
+        /* Medarbeider: list view (default) */
+        <div className="card-panel overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[var(--hiver-border)] bg-[var(--hiver-bg)]">
+                  <th className="text-left p-3 font-medium text-[var(--hiver-text)]">Dato</th>
+                  <th className="text-left p-3 font-medium text-[var(--hiver-text)]">Type</th>
+                  <th className="text-left p-3 font-medium text-[var(--hiver-text)]">Beskrivelse</th>
+                  <th className="text-right p-3 font-medium text-[var(--hiver-text)]">Timer</th>
+                  <th className="text-left p-3 font-medium text-[var(--hiver-text)]">Status</th>
+                  <th className="p-3 w-24 text-right font-medium text-[var(--hiver-text)]">Handlinger</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayEntries.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-6 text-center text-[var(--hiver-text-muted)]">Ingen registreringer.</td>
+                  </tr>
+                ) : (
+                  [...displayEntries]
+                    .sort((a, b) => b.entry_date.localeCompare(a.entry_date))
+                    .map((entry) => (
+                      <tr key={entry.id} className="border-b border-[var(--hiver-border)] hover:bg-[var(--hiver-bg)]/50">
+                        <td className="p-3 text-[var(--hiver-text)]">{entry.entry_date}</td>
+                        <td className="p-3">
+                          {entry.entry_type === 'work' ? getWorkTypeName(entry.work_type_id) + (entry.project_id ? ` · ${getProjectName(entry.project_id)}` : '') : getAbsenceLabel(entry.absence_type_id)}
+                        </td>
+                        <td className="p-3 text-[var(--hiver-text-muted)] max-w-[200px] truncate">{entry.description || '—'}</td>
+                        <td className="p-3 text-right font-medium">{formatHours(entry.hours)} t</td>
+                        <td className="p-3">
+                          <span className={`inline-flex px-2 py-0.5 rounded text-xs font-medium ${entry.status === 'approved' ? 'bg-green-100 text-green-800' : entry.status === 'rejected' ? 'bg-red-100 text-red-800' : entry.status === 'submitted' ? 'bg-amber-100 text-amber-800' : 'bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)]'}`}>
+                            {statusLabel[entry.status]}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right">
+                          {entry.status === 'submitted' && (
+                            <div className="flex justify-end gap-1">
+                              <button type="button" onClick={() => handleApprove(entry)} disabled={approvalActionLoading} className="p-1.5 rounded text-green-600 hover:bg-green-50" title="Godkjenn"><Check className="w-4 h-4" /></button>
+                              <button type="button" onClick={() => { setRejectModal(entry); setRejectComment(''); }} disabled={approvalActionLoading} className="p-1.5 rounded text-red-600 hover:bg-red-50" title="Avvis"><Ban className="w-4 h-4" /></button>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (view === 'week' || isEmployeeCalendarWeekOrDay) ? (
+        /* Ukevisning (eller dag/uke i medarbeider kalender) */
         <div className="card-panel p-5 overflow-x-auto">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4 min-w-[700px]">
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setWeekStart(subWeeks(weekStart, 1))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <button type="button" onClick={() => setWeekStart(addWeeks(weekStart, 1))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
-                <ChevronRight className="w-5 h-5" />
-              </button>
+              {isEmployeeCalendarWeekOrDay ? (
+                <>
+                  <button type="button" onClick={() => setApprovalPeriodDate(format(approvalPeriodType === 'day' ? addDays(parseISO(approvalPeriodDate), -1) : subWeeks(parseISO(approvalPeriodDate), 1), 'yyyy-MM-dd'))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <button type="button" onClick={() => setApprovalPeriodDate(format(approvalPeriodType === 'day' ? addDays(parseISO(approvalPeriodDate), 1) : addWeeks(parseISO(approvalPeriodDate), 1), 'yyyy-MM-dd'))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" onClick={() => setWeekStart(subWeeks(weekStart, 1))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <button type="button" onClick={() => setWeekStart(addWeeks(weekStart, 1))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </>
+              )}
               <span className="text-sm font-medium text-[var(--hiver-text)]">
-                {format(weekStart, 'd. MMM', { locale: nb })} – {format(addDays(weekStart, 6), 'd. MMM yyyy', { locale: nb })}
+                {effectiveWeekDates.length === 1 ? format(effectiveWeekStart, 'd. MMMM yyyy', { locale: nb }) : `${format(effectiveWeekStart, 'd. MMM', { locale: nb })} – ${format(addDays(effectiveWeekStart, effectiveWeekDates.length - 1), 'd. MMM yyyy', { locale: nb })}`}
               </span>
             </div>
-            {draftInWeek.length > 0 && (
+            {!(mainTab === 'employees' && employeesTabSelectedId) && draftInWeek.length > 0 && (
               <button
                 type="button"
                 onClick={() => handleSubmitMany(draftInWeek)}
@@ -726,9 +1266,9 @@ export function TimeRegistrationPage() {
             )}
           </div>
           <div className="relative min-w-[700px]">
-            <div ref={weekGridRef} className="grid" style={{ gridTemplateColumns: '56px repeat(7, 1fr)' }}>
+            <div ref={weekGridRef} className="grid" style={{ gridTemplateColumns: `56px repeat(${effectiveWeekDates.length}, 1fr)` }}>
               <div className="border-b border-r border-[var(--hiver-border)] p-1.5 bg-[var(--hiver-bg)]" style={{ minHeight: WEEK_GRID_HEADER_HEIGHT }} />
-              {weekDates.map((d) => (
+              {effectiveWeekDates.map((d) => (
                 <div
                   key={d.toISOString()}
                   className={`border-b border-r border-[var(--hiver-border)] p-1.5 text-center text-xs font-medium last:border-r-0 ${
@@ -749,7 +1289,7 @@ export function TimeRegistrationPage() {
                     <div className="border-b border-r border-[var(--hiver-border)] py-0.5 px-1 text-[10px] text-[var(--hiver-text-muted)] bg-[var(--hiver-panel-bg)] pointer-events-none select-none" style={{ minHeight: WEEK_SEGMENT_HEIGHT }}>
                       {timeLabel}
                     </div>
-                    {weekDates.map((d, dayIndex) => {
+                    {effectiveWeekDates.map((d, dayIndex) => {
                       const dateStr = format(d, 'yyyy-MM-dd');
                       const dayEntries = displayEntries.filter((e) => e.entry_date === dateStr);
                       const segStartMins = (hour - WEEK_FIRST_HOUR) * 60 + min;
@@ -798,31 +1338,35 @@ export function TimeRegistrationPage() {
               }}
             >
               {displayEntries
-                .filter((e) => weekDateStrs.includes(e.entry_date))
+                .filter((e) => effectiveWeekDateStrs.includes(e.entry_date))
                 .map((entry) => {
                   const block = entryToWeekBlock(entry);
                   if (!block) return null;
+                  const isApprovingEmployee = mainTab === 'employees' && employeesTabSelectedId && entry.team_member_id !== teamMemberId;
+                  const isApproved = entry.status === 'approved';
                   return (
                     <div
                       key={entry.id}
-                      className="absolute rounded-md overflow-hidden flex flex-col font-medium text-xs shadow-sm pointer-events-auto cursor-pointer border border-[var(--hiver-border)] hover:shadow-md"
+                      className={`absolute rounded-md overflow-hidden flex flex-col font-medium text-xs shadow-sm pointer-events-auto cursor-pointer hover:shadow-md ${isApproved ? 'border-2 border-green-500 bg-green-50' : 'border border-[var(--hiver-border)]'}`}
                       style={{
-                        left: `${(block.dayIndex / 7) * 100}%`,
-                        width: `${100 / 7}%`,
+                        left: `${(block.dayIndex / effectiveWeekDates.length) * 100}%`,
+                        width: `${100 / effectiveWeekDates.length}%`,
                         top: block.segStart * WEEK_SEGMENT_HEIGHT + 2,
                         height: block.heightPx - 4,
-                        backgroundColor: entry.entry_type === 'work' ? 'var(--hiver-accent-light)' : '#fef3c7',
-                        color: entry.entry_type === 'work' ? 'var(--hiver-accent)' : '#92400e',
-                        borderLeftWidth: 3,
-                        borderLeftColor: entry.entry_type === 'work' ? 'var(--hiver-accent)' : '#f59e0b',
+                        ...(isApproved ? {} : {
+                          backgroundColor: entry.entry_type === 'work' ? 'var(--hiver-accent-light)' : '#fef3c7',
+                          color: entry.entry_type === 'work' ? 'var(--hiver-accent)' : '#92400e',
+                          borderLeftWidth: 3,
+                          borderLeftColor: entry.entry_type === 'work' ? 'var(--hiver-accent)' : '#f59e0b',
+                        }),
                       }}
-                      title={`${isAdmin(role) && entry.team_member_id !== teamMemberId ? getMemberName(entry.team_member_id) + ' · ' : ''}${entry.entry_type === 'work' ? getWorkTypeName(entry.work_type_id) : getAbsenceLabel(entry.absence_type_id)} ${formatHours(entry.hours)} t`}
+                      title={`${entry.entry_type === 'work' ? getWorkTypeName(entry.work_type_id) : getAbsenceLabel(entry.absence_type_id)} ${formatHours(entry.hours)} t${isApproved ? ' · Godkjent' : ''}`}
                       onClick={(ev) => { ev.stopPropagation(); if (entry.team_member_id === teamMemberId) openEdit(entry); }}
                       onMouseDown={(ev) => ev.stopPropagation()}
                     >
                       <div className="p-1.5 flex-1 flex items-start justify-between gap-1 min-h-0 overflow-hidden">
-                        <span className="truncate">
-                          {isAdmin(role) && entry.team_member_id !== teamMemberId && <span className="opacity-80">{getMemberName(entry.team_member_id)} · </span>}
+                        <span className="truncate flex items-center gap-1">
+                          {isApproved && <Check className="w-3 h-3 shrink-0 text-green-600" />}
                           {entry.entry_type === 'work' ? getWorkTypeName(entry.work_type_id) : getAbsenceLabel(entry.absence_type_id)} {formatHours(entry.hours)} t
                         </span>
                         {entry.team_member_id === teamMemberId && entry.status === 'draft' && (
@@ -835,6 +1379,12 @@ export function TimeRegistrationPage() {
                             <Send className="w-3 h-3" />
                           </button>
                         )}
+                        {isApprovingEmployee && entry.status === 'submitted' && (
+                          <div className="flex gap-0.5 shrink-0" onClick={(ev) => ev.stopPropagation()}>
+                            <button type="button" onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); handleApprove(entry); }} disabled={approvalActionLoading} className="p-0.5 rounded hover:bg-green-100 text-green-600" title="Godkjenn"><Check className="w-3 h-3" /></button>
+                            <button type="button" onClick={(ev) => { ev.stopPropagation(); ev.preventDefault(); setRejectModal(entry); setRejectComment(''); }} disabled={approvalActionLoading} className="p-0.5 rounded hover:bg-red-100 text-red-600" title="Avvis"><Ban className="w-3 h-3" /></button>
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -842,22 +1392,35 @@ export function TimeRegistrationPage() {
             </div>
           </div>
         </div>
-      ) : view === 'month' ? (
-        /* Månedsvisning */
+      ) : (view === 'month' || isEmployeeCalendarMonth) ? (
+        /* Månedsvisning (eller måned i medarbeider kalender) */
         <div className="card-panel p-5">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <div className="flex items-center gap-2">
-              <button type="button" onClick={() => setMonthStart(subMonths(monthStart, 1))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
-                <ChevronLeft className="w-5 h-5" />
-              </button>
-              <button type="button" onClick={() => setMonthStart(addMonths(monthStart, 1))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
-                <ChevronRight className="w-5 h-5" />
-              </button>
+              {isEmployeeCalendarMonth ? (
+                <>
+                  <button type="button" onClick={() => setApprovalPeriodDate(format(subMonths(parseISO(approvalPeriodDate), 1), 'yyyy-MM-dd'))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <button type="button" onClick={() => setApprovalPeriodDate(format(addMonths(parseISO(approvalPeriodDate), 1), 'yyyy-MM-dd'))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button type="button" onClick={() => setMonthStart(subMonths(monthStart, 1))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
+                    <ChevronLeft className="w-5 h-5" />
+                  </button>
+                  <button type="button" onClick={() => setMonthStart(addMonths(monthStart, 1))} className="p-2 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]">
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </>
+              )}
               <span className="text-lg font-semibold text-[var(--hiver-text)]">
-                {format(monthStart, 'MMMM yyyy', { locale: nb })}
+                {format(effectiveMonthStart, 'MMMM yyyy', { locale: nb })}
               </span>
             </div>
-            {draftInMonth.length > 0 && (
+            {!(mainTab === 'employees' && employeesTabSelectedId) && draftInMonth.length > 0 && (
               <button
                 type="button"
                 onClick={() => handleSubmitMany(draftInMonth)}
@@ -875,8 +1438,8 @@ export function TimeRegistrationPage() {
               </div>
             ))}
             {(() => {
-              const start = startOfMonth(monthStart);
-              const end = endOfMonth(monthStart);
+              const start = startOfMonth(effectiveMonthStart);
+              const end = endOfMonth(effectiveMonthStart);
               const startPad = (start.getDay() + 6) % 7;
               const daysInMonth = end.getDate();
               const cells = startPad + daysInMonth;
@@ -903,43 +1466,55 @@ export function TimeRegistrationPage() {
                     key={dateStr}
                     className={`min-h-[100px] p-2 flex flex-col rounded-sm ${
                       isToday ? 'bg-[var(--hiver-accent-light)] border border-[var(--hiver-accent)]' : 'bg-[var(--hiver-panel-bg)]'
-                    } ${!isSameMonth(d, monthStart) ? 'opacity-50' : ''}`}
+                    } ${!isSameMonth(d, effectiveMonthStart) ? 'opacity-50' : ''}`}
                   >
                     <div className="flex justify-between items-center mb-1">
                       <span className={`text-sm font-medium ${isToday ? 'text-[var(--hiver-accent)]' : 'text-[var(--hiver-text)]'}`}>{dayNum}</span>
-                      <button
-                        type="button"
-                        onClick={() => openAdd(dateStr)}
-                        className="p-1 rounded text-[var(--hiver-accent)] hover:bg-[var(--hiver-accent)]/15 text-xs"
-                        title="Legg til"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                      </button>
+                      {!(mainTab === 'employees' && employeesTabSelectedId) && (
+                        <button
+                          type="button"
+                          onClick={() => openAdd(dateStr)}
+                          className="p-1 rounded text-[var(--hiver-accent)] hover:bg-[var(--hiver-accent)]/15 text-xs"
+                          title="Legg til"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                     <div className="flex-1 space-y-0.5 overflow-auto">
-                      {dayEntries.slice(0, 3).map((e) => (
-                        <div
-                          key={e.id}
-                          className="text-[10px] py-0.5 px-1.5 rounded bg-[var(--hiver-bg)] truncate cursor-pointer hover:bg-[var(--hiver-accent)]/15 flex items-center justify-between gap-1 group"
-                          onClick={() => e.team_member_id === teamMemberId && openEdit(e)}
-                          title={`${isAdmin(role) && e.team_member_id !== teamMemberId ? getMemberName(e.team_member_id) + ' · ' : ''}${e.entry_type === 'work' ? getWorkTypeName(e.work_type_id) : getAbsenceLabel(e.absence_type_id)} ${formatHours(e.hours)} t`}
-                        >
-                          <span className="truncate min-w-0">
-                            {isAdmin(role) && e.team_member_id !== teamMemberId && <span className="opacity-70">{getMemberName(e.team_member_id)} · </span>}
-                            {e.entry_type === 'work' ? getWorkTypeName(e.work_type_id) : getAbsenceLabel(e.absence_type_id)} {formatHours(e.hours)} t
-                          </span>
-                          {e.team_member_id === teamMemberId && e.status === 'draft' && (
-                            <button
-                              type="button"
-                              onClick={(ev) => { ev.stopPropagation(); handleSubmit(e); }}
-                              className="shrink-0 p-0.5 rounded hover:bg-[var(--hiver-accent)]/20"
-                              title="Send til godkjenning"
-                            >
-                              <Send className="w-3 h-3" />
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                      {dayEntries.slice(0, 3).map((e) => {
+                        const isApprovingEmployee = mainTab === 'employees' && employeesTabSelectedId && e.team_member_id !== teamMemberId;
+                        const isApproved = e.status === 'approved';
+                        return (
+                          <div
+                            key={e.id}
+                            className={`text-[10px] py-0.5 px-1.5 rounded truncate cursor-pointer flex items-center justify-between gap-1 group ${isApproved ? 'bg-green-100 border border-green-400 text-green-800' : 'bg-[var(--hiver-bg)] hover:bg-[var(--hiver-accent)]/15'}`}
+                            onClick={() => e.team_member_id === teamMemberId && openEdit(e)}
+                            title={`${e.entry_type === 'work' ? getWorkTypeName(e.work_type_id) : getAbsenceLabel(e.absence_type_id)} ${formatHours(e.hours)} t${isApproved ? ' · Godkjent' : ''}`}
+                          >
+                            <span className="truncate min-w-0 flex items-center gap-1">
+                              {isApproved && <Check className="w-2.5 h-2.5 shrink-0 text-green-600" />}
+                              {e.entry_type === 'work' ? getWorkTypeName(e.work_type_id) : getAbsenceLabel(e.absence_type_id)} {formatHours(e.hours)} t
+                            </span>
+                            {e.team_member_id === teamMemberId && e.status === 'draft' && (
+                              <button
+                                type="button"
+                                onClick={(ev) => { ev.stopPropagation(); handleSubmit(e); }}
+                                className="shrink-0 p-0.5 rounded hover:bg-[var(--hiver-accent)]/20"
+                                title="Send til godkjenning"
+                              >
+                                <Send className="w-3 h-3" />
+                              </button>
+                            )}
+                            {isApprovingEmployee && e.status === 'submitted' && (
+                              <div className="flex gap-0.5 shrink-0" onClick={(ev) => ev.stopPropagation()}>
+                                <button type="button" onClick={(ev) => { ev.stopPropagation(); handleApprove(e); }} disabled={approvalActionLoading} className="p-0.5 rounded hover:bg-green-200 text-green-600" title="Godkjenn"><Check className="w-2.5 h-2.5" /></button>
+                                <button type="button" onClick={(ev) => { ev.stopPropagation(); setRejectModal(e); setRejectComment(''); }} disabled={approvalActionLoading} className="p-0.5 rounded hover:bg-red-200 text-red-600" title="Avvis"><Ban className="w-2.5 h-2.5" /></button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                       {dayEntries.length > 3 && <span className="text-[10px] text-[var(--hiver-text-muted)]">+{dayEntries.length - 3}</span>}
                     </div>
                     {dayHours > 0 && (
@@ -959,7 +1534,6 @@ export function TimeRegistrationPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-[var(--hiver-border)] bg-[var(--hiver-bg)]">
-                  {isAdmin(role) && <th className="text-left p-3 font-medium text-[var(--hiver-text)]">Bruker</th>}
                   <th className="text-left p-3 font-medium text-[var(--hiver-text)]">Dato</th>
                   <th className="text-left p-3 font-medium text-[var(--hiver-text)]">Type</th>
                   <th className="text-left p-3 font-medium text-[var(--hiver-text)]">Beskrivelse</th>
@@ -971,7 +1545,7 @@ export function TimeRegistrationPage() {
               <tbody>
                 {displayEntries.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin(role) ? 7 : 6} className="p-6 text-center text-[var(--hiver-text-muted)]">
+                    <td colSpan={6} className="p-6 text-center text-[var(--hiver-text-muted)]">
                       Ingen timeregistreringer. Klikk «Ny registrering» for å legge til.
                     </td>
                   </tr>
@@ -980,7 +1554,6 @@ export function TimeRegistrationPage() {
                     .sort((a, b) => b.entry_date.localeCompare(a.entry_date))
                     .map((entry) => (
                       <tr key={entry.id} className="border-b border-[var(--hiver-border)] hover:bg-[var(--hiver-bg)]/50">
-                        {isAdmin(role) && <td className="p-3 text-[var(--hiver-text-muted)]">{getMemberName(entry.team_member_id)}</td>}
                         <td className="p-3 text-[var(--hiver-text)]">{entry.entry_date}</td>
                         <td className="p-3">
                           {entry.entry_type === 'work' ? (

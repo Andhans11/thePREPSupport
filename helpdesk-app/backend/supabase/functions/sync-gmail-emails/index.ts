@@ -547,7 +547,18 @@ serve(async (req) => {
     for (const row of rows ?? []) {
       if (!row.refresh_token) continue;
       try {
-        totalCreated += await runSyncForGmailRow(serviceSupabase, row as GmailSyncRow);
+        const created = await runSyncForGmailRow(serviceSupabase, row as GmailSyncRow);
+        totalCreated += created;
+        await serviceSupabase
+          .from('gmail_sync_last_result')
+          .upsert(
+            {
+              tenant_id: row.tenant_id,
+              last_run_at: new Date().toISOString(),
+              created_count: created,
+            },
+            { onConflict: 'tenant_id' }
+          );
       } catch (e) {
         console.error('Sync failed for', row.tenant_id, e);
       }
@@ -616,6 +627,16 @@ serve(async (req) => {
   }
 
   const created = await runSyncForGmailRow(serviceSupabase, gmailRow as GmailSyncRow);
+  await serviceSupabase
+    .from('gmail_sync_last_result')
+    .upsert(
+      {
+        tenant_id: gmailRow.tenant_id,
+        last_run_at: new Date().toISOString(),
+        created_count: created,
+      },
+      { onConflict: 'tenant_id' }
+    );
   return new Response(JSON.stringify({ success: true, created }), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });

@@ -72,6 +72,22 @@ serve(async (req) => {
     });
   }
 
+  // C4: Verify the authenticated user is a member of the specified tenant before OAuth exchange
+  const { data: membership, error: membershipError } = await supabase
+    .from('team_members')
+    .select('id')
+    .eq('tenant_id', tenantId)
+    .eq('user_id', user.id)
+    .eq('is_active', true)
+    .maybeSingle();
+
+  if (membershipError || !membership) {
+    return new Response(
+      JSON.stringify({ error: 'You do not have access to this organization. Only members can connect Gmail.' }),
+      { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
   const serviceSupabaseForOAuth = createClient(
     Deno.env.get('SUPABASE_URL') ?? '',
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''

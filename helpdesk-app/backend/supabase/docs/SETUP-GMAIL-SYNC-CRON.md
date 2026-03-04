@@ -91,7 +91,14 @@ If you prefer to run the migration SQL by hand:
 - In the Dashboard, go to **Database** → **Cron Jobs** (or **Integrations** → **Cron**). You should see **sync-gmail-emails-every-5-min** scheduled every 15 minutes.
 - After a few minutes, check that new emails still create tickets and that the **Last sync** time for Gmail in your app’s settings updates.
 
-If the cron fails (e.g. 401), double-check:
+If the cron fails (e.g. **401 Unauthorized** in the function logs):
 
-- `project_url` in Vault has no typo and no trailing slash.
-- `CRON_SECRET` for the Edge Function exactly matches the value stored in Vault for `gmail_sync_cron_secret`.
+1. **Vault** (Dashboard → SQL Editor or Database → Vault):  
+   Ensure a secret exists with **name** `gmail_sync_cron_secret` and a value you choose (e.g. `gmail-sync-cron-5min-secret`). The cron job reads this and sends it as the `x-cron-secret` header.
+
+2. **Edge Function secret** (Dashboard → Edge Functions → sync-gmail-emails → Secrets):  
+   Add or edit a secret with **name** `CRON_SECRET` and **value** exactly the same as the Vault secret value above. If the names or values don’t match, the function treats the request as a normal user request and returns 401 (no Bearer token).
+
+3. **project_url** in Vault: no typo and no trailing slash.
+
+After changing secrets, the next cron run (within 15 minutes) will use the new values; no need to redeploy the function.

@@ -8,7 +8,7 @@ import { isAdmin } from '../../types/roles';
 import { formatDateTime } from '../../utils/formatters';
 import { supabase } from '../../services/supabase';
 import { useToast } from '../../contexts/ToastContext';
-import { Mail, RefreshCw, Unplug, ArrowLeft, Key } from 'lucide-react';
+import { Mail, RefreshCw, Unplug, ArrowLeft, Key, ChevronDown, ChevronRight, BookOpen } from 'lucide-react';
 import { SaveButton } from '../ui/SaveButton';
 
 export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' }) {
@@ -36,6 +36,7 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
   const [oauthClientId, setOauthClientId] = useState('');
   const [oauthClientSecret, setOauthClientSecret] = useState('');
   const [savingOAuth, setSavingOAuth] = useState(false);
+  const [manualOpen, setManualOpen] = useState(false);
   const adminCanEditOAuth = isAdmin(role);
 
   // Step 1 = enter team email, step 2 = authorize with Google (Client ID/Secret handle both user and group)
@@ -120,6 +121,57 @@ export function GmailIntegration({ mode = 'full' }: { mode?: 'full' | 'addOnly' 
           </button>
         </div>
       )}
+
+      {/* Accordion: manual for finding Client ID and Secret (before OAuth inputs) */}
+      {!showConnectedView && (
+        <div className="mt-4 mb-4 rounded-xl border border-[var(--hiver-border)] bg-[var(--hiver-bg)]/30 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setManualOpen((o) => !o)}
+            className="w-full flex items-center justify-between gap-2 px-4 py-3 text-left text-sm font-medium text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]/50 transition-colors"
+            aria-expanded={manualOpen}
+          >
+            <span className="flex items-center gap-2">
+              <BookOpen className="w-4 h-4 text-[var(--hiver-accent)]" />
+              Slik finner du Client ID og Client Secret (Google Cloud)
+            </span>
+            {manualOpen ? <ChevronDown className="w-4 h-4 shrink-0" /> : <ChevronRight className="w-4 h-4 shrink-0" />}
+          </button>
+          {manualOpen && (
+            <div className="px-4 pb-4 pt-0 border-t border-[var(--hiver-border)]">
+              <p className="text-xs text-[var(--hiver-text-muted)] mt-3 mb-3">
+                Følg stegene nedenfor i Google Cloud Console. Deretter lim inn Client ID og Client Secret i feltene under.
+              </p>
+              <ol className="list-decimal list-inside space-y-2 text-sm text-[var(--hiver-text-muted)]">
+                <li>
+                  Opprett eller velg et prosjekt i{' '}
+                  <a href="https://console.cloud.google.com/" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">Google Cloud Console</a>.
+                </li>
+                <li>
+                  <strong className="text-[var(--hiver-text)]">Konfigurer OAuth-samtykkeskjermen</strong> (påkrevd). Gå til{' '}
+                  <a href="https://console.cloud.google.com/apis/credentials/consent" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">OAuth-samtykkeskjerm</a>, velg brukertype (ekstern hvis brukere utenfor Workspace), fyll ut appnavn og brukerstøtte-e-post, og lagre.
+                </li>
+                <li>
+                  Opprett legitimasjon: gå til{' '}
+                  <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-[var(--hiver-accent)] underline hover:no-underline">Legitimasjoner</a> → Opprett legitimasjon → OAuth 2.0-klient-ID. Type: <strong className="text-[var(--hiver-text)]">Web-applikasjon</strong>.
+                </li>
+                <li>
+                  <strong className="text-[var(--hiver-text)]">Autoriserte JavaScript-origins:</strong> legg til appens opprinnelse (uten sti), f.eks.{' '}
+                  <code className="text-xs bg-[var(--hiver-panel-bg)] px-1.5 py-0.5 rounded border border-[var(--hiver-border)]">{typeof window !== 'undefined' ? window.location.origin : 'http://localhost:5173'}</code>.
+                </li>
+                <li>
+                  <strong className="text-[var(--hiver-text)]">Autoriserte omdirigerings-URI-er:</strong> legg til callback-URL (med sti), f.eks.{' '}
+                  <code className="text-xs bg-[var(--hiver-panel-bg)] px-1.5 py-0.5 rounded border border-[var(--hiver-border)] break-all">{typeof window !== 'undefined' ? (import.meta.env?.VITE_GOOGLE_REDIRECT_URI || `${window.location.origin}/oauth/callback`) : 'https://.../oauth/callback'}</code>. Må være nøyaktig lik i Google, frontend og backend. Ved «unauthorized_client» eller «Token exchange failed», sjekk at URI-en står i Google og at klienttypen er Nettapplikasjon.
+                </li>
+                <li>
+                  Kopier <strong className="text-[var(--hiver-text)]">Client ID</strong> og <strong className="text-[var(--hiver-text)]">Client Secret</strong> fra Google (under Legitimasjoner → din OAuth-klient) og lim inn i feltene under. Ingen mellomrom i starten eller slutten.
+                </li>
+              </ol>
+            </div>
+          )}
+        </div>
+      )}
+
       {showConnectedView ? (
         <div className="mt-4 space-y-5">
           <p className="text-sm text-[var(--hiver-text-muted)]">

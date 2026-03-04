@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTickets } from '../../contexts/TicketContext';
 import { useAuth } from '../../contexts/AuthContext';
+import { useTenant } from '../../contexts/TenantContext';
 import { useMasterData } from '../../contexts/MasterDataContext';
+import { supabase } from '../../services/supabase';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
 import { isAdmin } from '../../types/roles';
 import { formatListTime } from '../../utils/formatters';
 import type { Ticket } from '../../types/ticket';
 import { StatusBadge } from './StatusBadge';
-import { Search, Plus, Archive, Trash2, UserPlus, X } from 'lucide-react';
+import { Search, Plus, Archive, Trash2, UserPlus, User, MessageCircle, X } from 'lucide-react';
 
 const ARCHIVED_STATUS = 'archived';
 
@@ -34,6 +36,8 @@ function formatDueInfo(dueDate: string | null): { text: string; isOverdue: boole
 function TicketRow({
   ticket,
   categories,
+  assigneeName,
+  hasUnreadCustomerReply,
   isSelected,
   onSelect,
   onArchive,
@@ -42,6 +46,8 @@ function TicketRow({
 }: {
   ticket: Ticket;
   categories: { id: string; name: string; color_hex?: string | null }[];
+  assigneeName: string | null;
+  hasUnreadCustomerReply: boolean;
   isSelected: boolean;
   onSelect: () => void;
   onArchive?: () => void;
@@ -80,12 +86,21 @@ function TicketRow({
           isSelected ? 'bg-[var(--hiver-selected-bg)]' : ''
         }`}
       >
-        <div className="w-3 shrink-0 flex items-center justify-center">
+        <div className="w-3 shrink-0 flex items-center justify-center gap-0.5">
           {isNew && (
             <span
               className="w-2.5 h-2.5 rounded-full bg-[var(--hiver-unread-dot)]"
               aria-hidden
             />
+          )}
+          {hasUnreadCustomerReply && (
+            <span
+              className="flex items-center justify-center text-[var(--hiver-accent)]"
+              title="Ny oppdatering fra kunde"
+              aria-label="Ny oppdatering fra kunde"
+            >
+              <MessageCircle className="w-3.5 h-3.5" />
+            </span>
           )}
         </div>
         <div className="min-w-0 flex-1">
@@ -117,6 +132,15 @@ function TicketRow({
             <span className="inline-block px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)]">
               {priorityLabel}
             </span>
+            {assigneeName && (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)]"
+                title={`Tildelt: ${assigneeName}`}
+              >
+                <User className="w-3 h-3 shrink-0" aria-hidden />
+                {assigneeName}
+              </span>
+            )}
             {ticket.category && (
               <span
                 className="inline-block px-2 py-0.5 rounded-full text-[10px] font-medium text-white"
@@ -174,13 +198,35 @@ interface TicketListProps {
 }
 
 export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, onSelectTicket, overlayCloseButton }: TicketListProps) {
-  const { tickets, selectedTicket, selectTicket, loading, error, fetchTickets, loadMoreTickets, updateTicket, deleteTicket, assignmentView, loadingMore, hasMoreTickets } = useTickets();
+  const { tickets, selectedTicket, selectTicket, ticketIdsWithUnreadCustomerMessage, loading, error, fetchTickets, loadMoreTickets, updateTicket, deleteTicket, assignmentView, loadingMore, hasMoreTickets } = useTickets();
   const { user } = useAuth();
   const { role } = useCurrentUserRole();
+  const { currentTenantId } = useTenant();
   const { categories, statuses } = useMasterData();
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [search, setSearch] = useState('');
+  const [assigneeNames, setAssigneeNames] = useState<Record<string, string>>({});
   const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!currentTenantId) {
+      setAssigneeNames({});
+      return;
+    }
+    supabase
+      .from('team_members')
+      .select('user_id, name')
+      .eq('tenant_id', currentTenantId)
+      .not('user_id', 'is', null)
+      .eq('is_active', true)
+      .then(({ data }) => {
+        const map: Record<string, string> = {};
+        (data ?? []).forEach((row: { user_id: string; name: string | null }) => {
+          if (row.user_id) map[row.user_id] = row.name ?? row.user_id;
+        });
+        setAssigneeNames(map);
+      });
+  }, [currentTenantId]);
 
   useEffect(() => {
     if (!hasMoreTickets || loadingMore) return;
@@ -337,6 +383,8 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, o
                   key={ticket.id}
                   ticket={ticket}
                   categories={categories}
+                  assigneeName={ticket.assigned_to ? (assigneeNames[ticket.assigned_to] ?? 'Ukjent') : null}
+                  hasUnreadCustomerReply={ticketIdsWithUnreadCustomerMessage.has(ticket.id)}
                   isSelected={selectedTicket?.id === ticket.id}
                   onSelect={() => {
                     selectTicket(ticket);

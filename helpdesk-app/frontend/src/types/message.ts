@@ -18,6 +18,8 @@ export interface Message {
   /** Stored in Supabase Storage; each item: { storage_path, filename, mime_type, size? } */
   attachments: MessageAttachment[] | null;
   created_at: string;
+  /** When set, message has been read by an agent (customer messages start unread). */
+  read_at?: string | null;
 }
 
 export interface MessageInsert {

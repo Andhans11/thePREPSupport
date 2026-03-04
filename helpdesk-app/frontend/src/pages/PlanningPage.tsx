@@ -4,7 +4,7 @@ import { Calendar, Users, Trash2, X, PanelRightClose, PanelRightOpen, Pencil, Ch
 import { supabase } from '../services/supabase';
 import { useTenant } from '../contexts/TenantContext';
 import { useCurrentUserRole } from '../hooks/useCurrentUserRole';
-import { canManagePlanningSlots } from '../types/roles';
+import { canManagePlanningSlots, isAdmin } from '../types/roles';
 import { Select } from '../components/ui/Select';
 
 const DAYS = ['Man', 'Tir', 'Ons', 'Tor', 'Fre', 'Lør', 'Søn'];
@@ -197,6 +197,8 @@ export function PlanningPage() {
   });
   const [slots, setSlots] = useState<PlanningSlot[]>([]);
   const [members, setMembers] = useState<TeamMemberOption[]>([]);
+  /** For managers: set of team_member_id that are in teams they manage. Admins see all. */
+  const [managedTeamMemberIds, setManagedTeamMemberIds] = useState<Set<string> | null>(null);
   const [loading, setLoading] = useState(true);
 
   const calendarHours = useMemo(() => computeCalendarHours(businessHoursSchedule), [businessHoursSchedule]);
@@ -331,11 +333,39 @@ export function PlanningPage() {
     setPendingSlotRequests((data as PlanningSlotRequest[]) ?? []);
   }, [currentTenantId, canManageSlots]);
 
+  /** For managers: fetch team_member_ids of members in teams they manage. */
+  const fetchManagedTeamMemberIds = useCallback(async () => {
+    if (!currentTenantId || !teamMemberId || role !== 'manager') {
+      setManagedTeamMemberIds(null);
+      return;
+    }
+    const { data: teamsData } = await supabase
+      .from('teams')
+      .select('id')
+      .eq('tenant_id', currentTenantId)
+      .eq('manager_team_member_id', teamMemberId);
+    const teamIds = (teamsData ?? []).map((t: { id: string }) => t.id);
+    if (teamIds.length === 0) {
+      setManagedTeamMemberIds(new Set());
+      return;
+    }
+    const { data: tmtData } = await supabase
+      .from('team_member_teams')
+      .select('team_member_id')
+      .in('team_id', teamIds);
+    const ids = new Set((tmtData ?? []).map((r: { team_member_id: string }) => r.team_member_id));
+    setManagedTeamMemberIds(ids);
+  }, [currentTenantId, teamMemberId, role]);
+
   useEffect(() => {
     if (!currentTenantId) return;
     setLoading(true);
     Promise.all([fetchSlots(), fetchMembers(), fetchBusinessHours()]).finally(() => setLoading(false));
   }, [currentTenantId, fetchSlots, fetchMembers, fetchBusinessHours]);
+
+  useEffect(() => {
+    fetchManagedTeamMemberIds();
+  }, [fetchManagedTeamMemberIds]);
 
   useEffect(() => {
     fetchPendingSlotRequests();
@@ -425,7 +455,14 @@ export function PlanningPage() {
     [currentWeekStart, firstHour]
   );
 
-  const slotsInWeek = slots.filter((s) => {
+  /** Admin sees all slots; manager sees only slots for members in teams they manage. */
+  const visibleSlots = isAdmin(role)
+    ? slots
+    : managedTeamMemberIds
+      ? slots.filter((s) => managedTeamMemberIds.has(s.team_member_id))
+      : [];
+
+  const slotsInWeek = visibleSlots.filter((s) => {
     const start = new Date(s.start_at);
     return isWithinInterval(start, { start: weekStart, end: weekEnd });
   });
@@ -433,8 +470,15 @@ export function PlanningPage() {
   const filteredSlotsInWeek =
     filterUserIds.length === 0 ? slotsInWeek : slotsInWeek.filter((s) => filterUserIds.includes(s.team_member_id));
 
-  /** Right column list: agents see only their own slots; managers see all (no "Opptatt" in list for agents). */
+  /** Right column list: agents see only their own slots; managers see their team; admins see all. */
   const slotsInWeekForList = canManageSlots ? slotsInWeek : slotsInWeek.filter((s) => s.team_member_id === teamMemberId);
+
+  /** Admin: all members for filter/add. Manager: only members in teams they manage (choose one by one). */
+  const membersForFilterAndAdd = isAdmin(role)
+    ? members
+    : managedTeamMemberIds
+      ? members.filter((m) => managedTeamMemberIds.has(m.id))
+      : [];
 
   /** Self-requested = agent used "Søk om vakt"; only managers/admins can approve those. */
   const isSelfRequestedSlot = (slot: PlanningSlot) =>
@@ -980,10 +1024,12 @@ export function PlanningPage() {
           : 'Opptatte tider vises som booket. Godkjenn eller avvis vakter leder har lagt inn, eller søk om ledige tider.'}
       </p>
 
-      {/* Filter by user (managers/admins only) */}
+      {/* Filter by user (managers: only their team; admins: all). Managers can choose one by one to approve. */}
       {canManageSlots && (
       <div className="mb-4 flex flex-wrap items-center gap-2">
-        <span className="text-xs font-medium text-[var(--hiver-text-muted)] shrink-0">Filtrer på bruker:</span>
+        <span className="text-xs font-medium text-[var(--hiver-text-muted)] shrink-0">
+          {role === 'manager' ? 'Filtrer på bruker (dine teammedlemmer):' : 'Filtrer på bruker:'}
+        </span>
         <button
           type="button"
           onClick={showAllUsers}
@@ -993,7 +1039,7 @@ export function PlanningPage() {
         >
           Alle
         </button>
-        {members.map((member) => {
+        {membersForFilterAndAdd.map((member) => {
           const isSelected = !filterActive || filterUserIds.includes(member.id);
           const colors = getUserColor(member.id, members);
           return (
@@ -1011,6 +1057,11 @@ export function PlanningPage() {
             </button>
           );
         })}
+        {role === 'manager' && membersForFilterAndAdd.length === 0 && managedTeamMemberIds && (
+          <span className="text-xs text-[var(--hiver-text-muted)]">
+            Du er ikke satt som leder for noe team, eller teamene har ingen medlemmer. Gå til Innstillinger → Team.
+          </span>
+        )}
       </div>
       )}
 
@@ -1491,7 +1542,7 @@ export function PlanningPage() {
                   <p className="text-xs text-[var(--hiver-text-muted)]">Klikk på en bruker for å legge til eller fjerne fra denne tiden.</p>
                 </div>
                 <ul className="overflow-y-auto flex-1 min-h-0 p-4 pt-0 space-y-1">
-                  {members.map((member) => {
+                  {membersForFilterAndAdd.map((member) => {
                     const existingSlot = slotsOverlappingSelection.find((s) => s.team_member_id === member.id);
                     const isAdding = addingMemberId === member.id;
                     return (
@@ -2188,7 +2239,7 @@ export function PlanningPage() {
                 <Select
                   value={scheduleMemberId}
                   onChange={setScheduleMemberId}
-                  options={members.map((m) => ({ value: m.id, label: `${m.name} (${m.email})` }))}
+                  options={membersForFilterAndAdd.map((m) => ({ value: m.id, label: `${m.name} (${m.email})` }))}
                   placeholder="Velg bruker"
                   className="w-full"
                 />

@@ -16,6 +16,8 @@ interface TicketContextValue {
   tickets: Ticket[];
   selectedTicket: Ticket | null;
   messages: Message[];
+  /** Ticket IDs that have at least one unread customer message (customer replied, not yet seen). */
+  ticketIdsWithUnreadCustomerMessage: Set<string>;
   loading: boolean;
   loadingMore: boolean;
   hasMoreTickets: boolean;
@@ -51,6 +53,7 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [ticketIdsWithUnreadCustomerMessage, setTicketIdsWithUnreadCustomerMessage] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMoreTickets, setHasMoreTickets] = useState(false);
@@ -60,6 +63,13 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
   const [viewCounts, setViewCounts] = useState<ViewCounts>({ all: 0, mine: 0, unassigned: 0, team: 0, archived: 0 });
   const lastFiltersRef = useRef<{ status?: string; search?: string; assignmentView: AssignmentView; userId: string | null } | null>(null);
   const searchResultIdsRef = useRef<string[] | null>(null);
+  const fetchTicketsRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  const realtimeRef = useRef<{
+    fetchMessages: (id: string) => Promise<void>;
+    selectedTicketId: string | null;
+    ticketIds?: string[];
+    fetchUnread?: (ids: string[]) => void;
+  }>({ fetchMessages: async () => {}, selectedTicketId: null });
 
   const getMyTeamIds = useCallback(
     async (userId: string | null): Promise<string[]> => {
@@ -296,6 +306,26 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const fetchUnreadCustomerTicketIds = useCallback(async (ticketIds: string[]) => {
+    if (ticketIds.length === 0) {
+      setTicketIdsWithUnreadCustomerMessage(new Set());
+      return;
+    }
+    const BATCH = 100;
+    const ids = new Set<string>();
+    for (let i = 0; i < ticketIds.length; i += BATCH) {
+      const batch = ticketIds.slice(i, i + BATCH);
+      const { data } = await supabase
+        .from('messages')
+        .select('ticket_id')
+        .in('ticket_id', batch)
+        .eq('is_customer', true)
+        .is('read_at', null);
+      (data ?? []).forEach((row: { ticket_id: string }) => ids.add(row.ticket_id));
+    }
+    setTicketIdsWithUnreadCustomerMessage(ids);
+  }, []);
+
   useEffect(() => {
     fetchTickets({ assignmentView, userId: user?.id ?? null });
   }, [fetchTickets, assignmentView, user?.id, currentTenantId]);
@@ -318,27 +348,48 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
     fetchMessages(selectedTicket.id);
   }, [selectedTicket?.id, fetchMessages]);
 
+  // Refresh which tickets have unread customer messages when the ticket list changes
   useEffect(() => {
+    if (tickets.length === 0) {
+      setTicketIdsWithUnreadCustomerMessage(new Set());
+      return;
+    }
+    fetchUnreadCustomerTicketIds(tickets.map((t) => t.id));
+  }, [tickets, fetchUnreadCustomerTicketIds]);
+
+  // Keep refs updated so realtime subscription always calls latest handlers without re-subscribing
+  fetchTicketsRef.current = fetchTickets;
+  realtimeRef.current = { fetchMessages, selectedTicketId: selectedTicket?.id ?? null, ticketIds: tickets.map((t) => t.id), fetchUnread: fetchUnreadCustomerTicketIds };
+
+  // Realtime: refetch ticket list when tickets change or when Gmail sync cron runs (new cases from inbox)
+  useEffect(() => {
+    if (!currentTenantId) return;
     const channel = supabase
-      .channel('tickets-changes')
+      .channel(`tickets-changes-${currentTenantId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'tickets' }, () => {
-        fetchTickets();
+        fetchTicketsRef.current();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gmail_sync_cron_last_run' }, () => {
+        fetchTicketsRef.current();
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
-        if (selectedTicket && (payload.new as { ticket_id: string }).ticket_id === selectedTicket.id) {
-          fetchMessages(selectedTicket.id);
+        const ticketId = (payload.new as { ticket_id?: string }).ticket_id;
+        if (ticketId && ticketId === realtimeRef.current.selectedTicketId) {
+          realtimeRef.current.fetchMessages(ticketId);
+        }
+        if (ticketId && realtimeRef.current.ticketIds?.includes(ticketId)) {
+          realtimeRef.current.fetchUnread?.(realtimeRef.current.ticketIds);
         }
       })
       .subscribe((status) => {
         if (status === 'CHANNEL_ERROR') {
-          // Realtime failed (e.g. wrong API key or Realtime disabled). App still works via manual refetch.
           console.debug('Realtime subscription unavailable; list will update on refresh.');
         }
       });
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchTickets, fetchMessages, selectedTicket?.id]);
+  }, [currentTenantId]);
 
   const createTicket = async (data: TicketInsert): Promise<Ticket | null> => {
     if (!currentTenantId) return null;
@@ -421,10 +472,33 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
     return (inserted as { id: string } | null)?.id ?? null;
   };
 
+  const selectTicket = useCallback(
+    (ticket: Ticket | null) => {
+      if (ticket) {
+        supabase
+          .from('messages')
+          .update({ read_at: new Date().toISOString() })
+          .eq('ticket_id', ticket.id)
+          .eq('is_customer', true)
+          .is('read_at', null)
+          .then(() => {
+            setTicketIdsWithUnreadCustomerMessage((prev) => {
+              const next = new Set(prev);
+              next.delete(ticket.id);
+              return next;
+            });
+          });
+      }
+      setSelectedTicket(ticket);
+    },
+    []
+  );
+
   const value: TicketContextValue = {
     tickets,
     selectedTicket,
     messages,
+    ticketIdsWithUnreadCustomerMessage,
     loading,
     loadingMore,
     hasMoreTickets,
@@ -434,7 +508,7 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
     viewCounts,
     fetchTickets,
     loadMoreTickets,
-    selectTicket: setSelectedTicket,
+    selectTicket,
     fetchMessages,
     createTicket,
     updateTicket,

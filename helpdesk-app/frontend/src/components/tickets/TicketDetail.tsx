@@ -27,6 +27,7 @@ import {
   X,
   FileText,
   Image,
+  CheckCircle,
 } from 'lucide-react';
 
 function formatMessageDate(iso: string) {
@@ -296,7 +297,7 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
           </button>
         </div>
 
-        {/* Subject + Assign to me when unassigned */}
+        {/* Subject + Assign to me when unassigned + Avslutt sak */}
         <div className="shrink-0 px-6 pt-5 pb-2 border-b border-[var(--hiver-border)] flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold text-[var(--hiver-text)] min-w-0 flex-1">
             {selectedTicket.subject}
@@ -308,6 +309,17 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
               className="shrink-0 px-3 py-1.5 rounded-lg text-sm font-medium bg-[var(--hiver-accent)] text-white hover:bg-[var(--hiver-accent-hover)]"
             >
               Tildel meg
+            </button>
+          )}
+          {selectedTicket.status !== 'closed' && (
+            <button
+              type="button"
+              onClick={() => updateTicket(selectedTicket.id, { status: 'closed' })}
+              className="shrink-0 inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium text-[var(--hiver-text-muted)] border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-text)]"
+              title="Avslutt saken og sett status til lukket"
+            >
+              <CheckCircle className="w-4 h-4" aria-hidden />
+              Avslutt sak
             </button>
           )}
         </div>

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGmail } from '../../contexts/GmailContext';
+import { useTickets } from '../../contexts/TicketContext';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
 import { useNotifications } from '../../hooks/useNotifications';
 import { formatDateTime } from '../../utils/formatters';
@@ -58,7 +59,8 @@ export function Header() {
   const notifRef = useRef<HTMLDivElement>(null);
 
   const { role, availableForEmail, setAvailableForEmail, availabilityStatus, setAvailabilityStatus, teamMemberId } = useCurrentUserRole();
-  const { lastSyncAt, syncNow, syncing } = useGmail();
+  const { lastSyncAt, lastSyncNewTicketsCount, syncNow, syncing } = useGmail();
+  const { fetchTickets } = useTickets();
   const { items: notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications({ unreadOnly: true });
   const admin = isAdmin(role);
 
@@ -117,14 +119,21 @@ export function Header() {
     <header className="h-14 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] flex items-center justify-between gap-4 px-4 shrink-0">
       <button
         type="button"
-        onClick={() => syncNow()}
+        onClick={async () => {
+          const result = await syncNow();
+          if (result?.success) fetchTickets();
+        }}
         disabled={syncing}
         className="flex items-center gap-2 min-w-0 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--hiver-bg)] transition-colors disabled:opacity-70 disabled:cursor-wait"
         title="Synkroniser e-post på nytt"
       >
         <RefreshCw className={`w-4 h-4 text-[var(--hiver-text-muted)] shrink-0 ${syncing ? 'animate-spin' : ''}`} aria-hidden />
         <span className="text-xs text-[var(--hiver-text-muted)] truncate" title={lastSyncAt ? formatDateTime(lastSyncAt) : undefined}>
-          {syncing ? 'Synkroniserer…' : lastSyncAt ? `Sist sync: ${formatDateTime(lastSyncAt)}` : 'Ingen sync ennå'}
+          {syncing
+            ? 'Synkroniserer…'
+            : lastSyncAt
+              ? `Sist hentet: ${formatDateTime(lastSyncAt)}${lastSyncNewTicketsCount != null ? ` · ${lastSyncNewTicketsCount} nye sak${lastSyncNewTicketsCount === 1 ? '' : 'er'}` : ''}`
+              : 'Ingen sync ennå'}
         </span>
       </button>
       <div className="flex items-center gap-2 shrink-0">

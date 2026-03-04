@@ -16,11 +16,16 @@ interface GmailSyncRow {
   updated_at: string;
 }
 
+const LAST_SYNC_CREATED_KEY = 'hiver_last_sync_created';
+const LAST_SYNC_CREATED_TOLERANCE_MS = 2 * 60 * 1000; // 2 min – treat as same sync
+
 interface GmailContextValue {
   isConnected: boolean;
   gmailEmail: string | null;
   groupEmail: string | null;
   lastSyncAt: string | null;
+  /** Number of new tickets created in the last sync (manual sync only; persisted per tenant). */
+  lastSyncNewTicketsCount: number | null;
   loading: boolean;
   syncing: boolean;
   savingGroupEmail: boolean;
@@ -47,6 +52,7 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
   const [syncing, setSyncing] = useState(false);
   const [savingGroupEmail, setSavingGroupEmail] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastSyncNewTicketsCount, setLastSyncNewTicketsCount] = useState<number | null>(null);
 
   const fetchTenantOAuth = useCallback(() => {
     if (!currentTenantId) {
@@ -76,7 +82,7 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
       return;
     }
-    const [gmailRes, cronRes] = await Promise.all([
+    const [gmailRes, cronRes, lastResultRes] = await Promise.all([
       supabase
         .from('gmail_sync')
         .select('id, user_id, email_address, group_email, is_active, last_sync_at, created_at, updated_at')
@@ -89,12 +95,35 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
         .select('last_run_at')
         .eq('id', 1)
         .maybeSingle(),
+      supabase
+        .from('gmail_sync_last_result')
+        .select('last_run_at, created_count')
+        .eq('tenant_id', currentTenantId)
+        .maybeSingle(),
     ]);
     const gmailData = gmailRes.data as GmailSyncRow | null;
     const cronRow = cronRes.data as { last_run_at?: string } | null;
     const cronLastRunAt = cronRow?.last_run_at ?? null;
     setGmailSync(gmailData ?? null);
     setCronLastRunAt(cronLastRunAt);
+
+    const inboxLastSync = gmailData?.last_sync_at ?? null;
+    const lastSyncAt =
+      inboxLastSync && cronLastRunAt
+        ? new Date(inboxLastSync) > new Date(cronLastRunAt)
+          ? inboxLastSync
+          : cronLastRunAt
+        : inboxLastSync ?? cronLastRunAt;
+    const lastResult = lastResultRes.data as { last_run_at?: string; created_count?: number } | null;
+    if (
+      lastSyncAt &&
+      lastResult?.last_run_at != null &&
+      Math.abs(new Date(lastResult.last_run_at).getTime() - new Date(lastSyncAt).getTime()) <= LAST_SYNC_CREATED_TOLERANCE_MS
+    ) {
+      setLastSyncNewTicketsCount(lastResult.created_count ?? 0);
+    } else {
+      setLastSyncNewTicketsCount(null);
+    }
     setLoading(false);
   }, [currentTenantId]);
 
@@ -159,10 +188,25 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     setSyncing(true);
     setError(null);
     const result = await triggerGmailSync(currentTenantId ?? undefined);
-    if (!result.success) setError(result.error || 'Sync failed');
-    else await fetchGmailSync();
+    if (!result.success) {
+      setSyncing(false);
+      return { success: false, created: result.created };
+    }
+    await fetchGmailSync();
+    const created = result.created ?? 0;
+    setLastSyncNewTicketsCount(created);
+    if (currentTenantId && typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(
+          `${LAST_SYNC_CREATED_KEY}_${currentTenantId}`,
+          JSON.stringify({ at: Date.now(), created })
+        );
+      } catch {
+        // ignore
+      }
+    }
     setSyncing(false);
-    return { success: result.success, created: result.created };
+    return { success: true, created };
   };
 
   const disconnect = async () => {
@@ -202,11 +246,33 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
         : cronLastRunAt
       : inboxLastSync ?? cronLastRunAt;
 
+  // Hydrate last-sync new-tickets count from localStorage when we have lastSyncAt (e.g. after refresh)
+  useEffect(() => {
+    if (!currentTenantId || !lastSyncAt) return;
+    try {
+      const raw = localStorage.getItem(`${LAST_SYNC_CREATED_KEY}_${currentTenantId}`);
+      const syncTime = new Date(lastSyncAt).getTime();
+      if (!raw) {
+        setLastSyncNewTicketsCount(null);
+        return;
+      }
+      const { at, created } = JSON.parse(raw) as { at: number; created: number };
+      if (Math.abs(at - syncTime) <= LAST_SYNC_CREATED_TOLERANCE_MS) {
+        setLastSyncNewTicketsCount(created);
+      } else {
+        setLastSyncNewTicketsCount(null); // different sync (e.g. cron), clear count
+      }
+    } catch {
+      setLastSyncNewTicketsCount(null);
+    }
+  }, [currentTenantId, lastSyncAt]);
+
   const value: GmailContextValue = {
     isConnected: !!gmailSync,
     gmailEmail: gmailSync?.email_address ?? null,
     groupEmail: gmailSync?.group_email ?? null,
     lastSyncAt,
+    lastSyncNewTicketsCount,
     loading,
     syncing,
     savingGroupEmail,

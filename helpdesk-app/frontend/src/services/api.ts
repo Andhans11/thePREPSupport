@@ -11,61 +11,62 @@ function normalizePathForCache(p: string): string {
   return String(p).trim().replace(/^\/+|\/+$/g, '');
 }
 
+/** Refresh session, then call an Edge Function. Returns { token } or { error }. */
+async function getTokenAfterRefresh(): Promise<{ token: string } | { error: string }> {
+  const { data, error: refreshError } = await supabase.auth.refreshSession();
+  const token = data.session?.access_token;
+  if (refreshError || !token) {
+    return { error: 'Ikke innlogget' };
+  }
+  return { token };
+}
+
+/** Call a Supabase Edge Function with auth. Refreshes session and uses Bearer token. */
+async function callEdgeFunction<TBody = unknown, TJson = Record<string, unknown>>(
+  name: string,
+  body: TBody
+): Promise<{ ok: true; json: TJson } | { ok: false; error: string }> {
+  const auth = await getTokenAfterRefresh();
+  if ('error' in auth) return { ok: false, error: auth.error };
+  const url = `${getSupabaseUrl()}/functions/v1/${name}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${auth.token}`,
+      apikey: getSupabaseAnonKey(),
+    },
+    body: JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => ({}))) as TJson & { error?: string; message?: string };
+  if (!res.ok) {
+    const msg = json.error ?? json.message ?? res.statusText;
+    return { ok: false, error: typeof msg === 'string' ? msg : res.statusText };
+  }
+  return { ok: true, json };
+}
+
 export async function exchangeOAuthCodeForTokens(
   code: string,
   tenantId?: string,
   groupEmail?: string | null
 ): Promise<{ success: boolean; error?: string }> {
-  await supabase.auth.refreshSession();
-  const { data: { session } } = await supabase.auth.getSession();
-  if (!session?.access_token) {
-    return { success: false, error: 'Ikke innlogget' };
-  }
-  const url = `${getSupabaseUrl()}/functions/v1/oauth-gmail-callback`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${session.access_token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify({
-      code,
-      tenant_id: tenantId ?? null,
-      group_email: groupEmail ?? null,
-    }),
+  const result = await callEdgeFunction('oauth-gmail-callback', {
+    code,
+    tenant_id: tenantId ?? null,
+    group_email: groupEmail ?? null,
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const message = json.message || json.error || res.statusText;
-    let err = typeof message === 'string' ? message : res.statusText;
-    if (json.details && typeof json.details === 'string') err += ` (${json.details})`;
-    return { success: false, error: err };
-  }
+  if (!result.ok) return { success: false, error: result.error };
   return { success: true };
 }
 
 export async function triggerGmailSync(tenantId?: string): Promise<{ success: boolean; created?: number; error?: string }> {
-  const { data, error: refreshError } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (refreshError || !token) {
-    return { success: false, error: 'Ikke innlogget' };
-  }
-  const url = `${getSupabaseUrl()}/functions/v1/sync-gmail-emails`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify({ tenant_id: tenantId ?? null }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { success: false, error: json.error || json.message || res.statusText };
-  }
-  return { success: true, created: typeof json.created === 'number' ? json.created : 0 };
+  const result = await callEdgeFunction<{ tenant_id: string | null }, { created?: number }>(
+    'sync-gmail-emails',
+    { tenant_id: tenantId ?? null }
+  );
+  if (!result.ok) return { success: false, error: result.error };
+  return { success: true, created: typeof result.json.created === 'number' ? result.json.created : 0 };
 }
 
 export interface EmailAttachment {
@@ -83,25 +84,16 @@ export async function sendGmailReply(
   attachment?: EmailAttachment | null,
   replyAll = false
 ): Promise<{ success: boolean; error?: string }> {
-  const { data, error: refreshError } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (refreshError || !token) {
-    return { success: false, error: 'Ikke innlogget' };
-  }
-  const url = `${getSupabaseUrl()}/functions/v1/send-gmail-reply`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify({ ticketId, message, to, isInternalNote, html, attachment, replyAll }),
+  const result = await callEdgeFunction('send-gmail-reply', {
+    ticketId,
+    message,
+    to,
+    isInternalNote,
+    html: html ?? undefined,
+    attachment: attachment ?? undefined,
+    replyAll,
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { success: false, error: json.error || json.message || res.statusText };
-  }
+  if (!result.ok) return { success: false, error: result.error };
   return { success: true };
 }
 
@@ -113,25 +105,15 @@ export async function sendGmailForward(
   attachment?: EmailAttachment | null,
   tenantId?: string | null
 ): Promise<{ success: boolean; error?: string }> {
-  const { data, error: refreshError } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (refreshError || !token) {
-    return { success: false, error: 'Ikke innlogget' };
-  }
-  const url = `${getSupabaseUrl()}/functions/v1/send-gmail-forward`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify({ to, subject, messagePlain, messageHtml, attachment, tenant_id: tenantId ?? null }),
+  const result = await callEdgeFunction('send-gmail-forward', {
+    to,
+    subject,
+    messagePlain,
+    messageHtml: messageHtml ?? undefined,
+    attachment: attachment ?? undefined,
+    tenant_id: tenantId ?? null,
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { success: false, error: json.error || json.message || res.statusText };
-  }
+  if (!result.ok) return { success: false, error: result.error };
   return { success: true };
 }
 
@@ -139,26 +121,13 @@ export async function sendInvitationEmail(
   invitationCode: string,
   inviteLink: string
 ): Promise<{ sent: boolean; error?: string }> {
-  const { data, error: refreshError } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (refreshError || !token) {
-    return { sent: false, error: 'Ikke innlogget' };
-  }
-  const url = `${getSupabaseUrl()}/functions/v1/send-invitation-email`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify({ invitation_code: invitationCode, invite_link: inviteLink }),
+  const result = await callEdgeFunction('send-invitation-email', {
+    invitation_code: invitationCode,
+    invite_link: inviteLink,
   });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { sent: false, error: json.error || json.message || res.statusText };
-  }
-  return { sent: json.sent === true, error: json.error ?? json.message };
+  if (!result.ok) return { sent: false, error: result.error };
+  const json = result.json as { sent?: boolean; error?: string };
+  return { sent: json.sent === true, error: json.error };
 }
 
 /** Get signed URLs for ticket attachment paths. Uses in-memory cache so reopening a ticket doesn't refetch. */
@@ -179,33 +148,14 @@ export async function signTicketAttachmentUrls(paths: string[]): Promise<{ urls:
   }
 
   if (toFetch.length > 0) {
-    const { data: sessionData } = await supabase.auth.getSession();
-    let token = sessionData.session?.access_token;
-    if (!token) {
-      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
-      token = refreshData.session?.access_token;
-      if (refreshError || !token) {
-        return { urls, error: 'Ikke innlogget' };
-      }
+    const result = await callEdgeFunction<{ paths: string[] }, { urls?: Record<string, string> }>(
+      'sign-ticket-attachment-urls',
+      { paths: toFetch }
+    );
+    if (!result.ok) {
+      return { urls, error: result.error };
     }
-    const url = `${getSupabaseUrl()}/functions/v1/sign-ticket-attachment-urls`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        apikey: getSupabaseAnonKey(),
-      },
-      body: JSON.stringify({ paths: toFetch }),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      const message = res.status === 401
-        ? (json.message || json.error || 'Sesjon utløpt. Logg inn på nytt.')
-        : (json.error || json.message || res.statusText);
-      return { urls, error: message };
-    }
-    const fresh = (json.urls ?? {}) as Record<string, string>;
+    const fresh = (result.json.urls ?? {}) as Record<string, string>;
     const expiresAt = now + ATTACHMENT_URL_CACHE_TTL_MS;
     for (const [path, signedUrl] of Object.entries(fresh)) {
       if (signedUrl) {
@@ -221,25 +171,12 @@ export async function signTicketAttachmentUrls(paths: string[]): Promise<{ urls:
 
 /** Notify users who have "email on new ticket" enabled. Called after creating a ticket. */
 export async function notifyNewTicket(ticketId: string, appUrl?: string | null): Promise<{ success: boolean; sent?: number; error?: string }> {
-  const { data, error: refreshError } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (refreshError || !token) {
-    return { success: false, error: 'Ikke innlogget' };
-  }
-  const url = `${getSupabaseUrl()}/functions/v1/send-new-ticket-notification`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify({ ticket_id: ticketId, app_url: appUrl ?? undefined }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    return { success: false, error: json.error || json.message || res.statusText };
-  }
+  const result = await callEdgeFunction(
+    'send-new-ticket-notification',
+    { ticket_id: ticketId, app_url: appUrl ?? undefined }
+  );
+  if (!result.ok) return { success: false, error: result.error };
+  const json = result.json as { sent?: number };
   return { success: true, sent: typeof json.sent === 'number' ? json.sent : 0 };
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Plus, UserPlus, Loader2, X, Copy, Mail, MailPlus, Trash2, UserCheck, UserX, Mail as MailIcon } from 'lucide-react';
 import { supabase } from '../../services/supabase';
 import { useTenant } from '../../contexts/TenantContext';
@@ -52,6 +52,7 @@ interface TeamMemberRow {
   is_active: boolean;
   available_for_email?: boolean;
   email_on_new_ticket?: boolean;
+  email_on_notifications?: boolean;
 }
 
 interface TeamOption {
@@ -85,12 +86,13 @@ export function UsersSettings() {
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
   const [modalMember, setModalMember] = useState<TeamMemberRow | null>(null);
 
-  const fetchMembers = async () => {
+  const fetchMembers = useCallback(async () => {
     if (!currentTenantId) return;
     setLoading(true);
+    const tenantId = currentTenantId;
     const [membersRes, teamsRes, memberTeamsRes] = await Promise.all([
-      supabase.from('team_members').select('id, user_id, name, email, role, is_active, available_for_email, email_on_new_ticket').eq('tenant_id', currentTenantId).order('name'),
-      supabase.from('teams').select('id, name').eq('tenant_id', currentTenantId).order('name'),
+      supabase.from('team_members').select('id, user_id, name, email, role, is_active, available_for_email, email_on_new_ticket, email_on_notifications').eq('tenant_id', tenantId).order('name'),
+      supabase.from('teams').select('id, name').eq('tenant_id', tenantId).order('name'),
       supabase.from('team_member_teams').select('team_member_id, team_id'),
     ]);
     const membersList = (membersRes.data as TeamMemberRow[]) || [];
@@ -111,7 +113,7 @@ export function UsersSettings() {
     setTeams(teamsList);
     setMemberTeams(tenantMemberTeams);
     setLoading(false);
-  };
+  }, [currentTenantId]);
 
   const getMemberTeamIds = (memberId: string) => memberTeams.filter((mt) => mt.team_member_id === memberId).map((mt) => mt.team_id);
 
@@ -135,7 +137,7 @@ export function UsersSettings() {
 
   useEffect(() => {
     fetchMembers();
-  }, [currentTenantId]);
+  }, [fetchMembers]);
 
   const handleAdd = async () => {
     const email = addEmail.trim().toLowerCase();
@@ -245,6 +247,26 @@ export function UsersSettings() {
       setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, email_on_new_ticket } : m)));
       setModalMember((prev) => (prev && prev.id === id ? { ...prev, email_on_new_ticket } : prev));
       toast.success(email_on_new_ticket ? 'E-post ved ny sak er aktivert' : 'E-post ved ny sak er deaktivert');
+    }
+    setSaving(null);
+  };
+
+  const handleToggleEmailOnNotifications = async (id: string, email_on_notifications: boolean) => {
+    if (!currentTenantId) return;
+    setSaving(id);
+    setError(null);
+    const { error: e } = await supabase
+      .from('team_members')
+      .update({ email_on_notifications })
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
+    if (e) {
+      setError(e.message);
+      toast.error(e.message);
+    } else {
+      setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, email_on_notifications } : m)));
+      setModalMember((prev) => (prev && prev.id === id ? { ...prev, email_on_notifications } : prev));
+      toast.success(email_on_notifications ? 'E-post ved varsler er aktivert' : 'E-post ved varsler er deaktivert');
     }
     setSaving(null);
   };
@@ -554,15 +576,26 @@ export function UsersSettings() {
                             <span className="text-xs text-[var(--hiver-text-muted)] w-8">Aktiv</span>
                           </div>
                           {m.user_id && m.email && (
-                            <div className="flex items-center gap-2" title="Motta e-post når en ny sak opprettes">
-                              <ToggleSwitch
-                                checked={!!m.email_on_new_ticket}
-                                onChange={(v) => handleToggleEmailOnNewTicket(m.id, v)}
-                                disabled={saving === m.id}
-                                label={m.email_on_new_ticket ? 'Slå av e-post ved ny sak' : 'Slå på e-post ved ny sak'}
-                              />
-                              <span className="text-xs text-[var(--hiver-text-muted)] whitespace-nowrap">E-post ved ny sak</span>
-                            </div>
+                            <>
+                              <div className="flex items-center gap-2" title="Motta e-post når en ny sak opprettes">
+                                <ToggleSwitch
+                                  checked={!!m.email_on_new_ticket}
+                                  onChange={(v) => handleToggleEmailOnNewTicket(m.id, v)}
+                                  disabled={saving === m.id}
+                                  label={m.email_on_new_ticket ? 'Slå av e-post ved ny sak' : 'Slå på e-post ved ny sak'}
+                                />
+                                <span className="text-xs text-[var(--hiver-text-muted)] whitespace-nowrap">E-post ved ny sak</span>
+                              </div>
+                              <div className="flex items-center gap-2" title="Motta e-post ved tildeling, kommentar eller kundesvar">
+                                <ToggleSwitch
+                                  checked={!!m.email_on_notifications}
+                                  onChange={(v) => handleToggleEmailOnNotifications(m.id, v)}
+                                  disabled={saving === m.id}
+                                  label={m.email_on_notifications ? 'Slå av e-post ved varsler' : 'Slå på e-post ved varsler'}
+                                />
+                                <span className="text-xs text-[var(--hiver-text-muted)] whitespace-nowrap">E-post ved varsler</span>
+                              </div>
+                            </>
                           )}
                         </div>
                       </div>
@@ -669,18 +702,32 @@ export function UsersSettings() {
               </div>
 
               {modalMember.user_id && modalMember.email && (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
-                    <span className="text-sm font-medium text-[var(--hiver-text)]">E-post ved ny sak</span>
+                <>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
+                      <span className="text-sm font-medium text-[var(--hiver-text)]">E-post ved ny sak</span>
+                    </div>
+                    <ToggleSwitch
+                      checked={!!modalMember.email_on_new_ticket}
+                      onChange={(v) => handleToggleEmailOnNewTicket(modalMember.id, v)}
+                      disabled={saving === modalMember.id}
+                      label="Motta e-post når en ny sak opprettes"
+                    />
                   </div>
-                  <ToggleSwitch
-                    checked={!!modalMember.email_on_new_ticket}
-                    onChange={(v) => handleToggleEmailOnNewTicket(modalMember.id, v)}
-                    disabled={saving === modalMember.id}
-                    label="Motta e-post når en ny sak opprettes"
-                  />
-                </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
+                      <span className="text-sm font-medium text-[var(--hiver-text)]">E-post ved varsler</span>
+                    </div>
+                    <ToggleSwitch
+                      checked={!!modalMember.email_on_notifications}
+                      onChange={(v) => handleToggleEmailOnNotifications(modalMember.id, v)}
+                      disabled={saving === modalMember.id}
+                      label="E-post ved tildeling, kommentar eller kundesvar"
+                    />
+                  </div>
+                </>
               )}
 
               <div>

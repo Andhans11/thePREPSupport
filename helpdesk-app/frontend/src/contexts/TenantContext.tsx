@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { useAuth } from './AuthContext';
 
@@ -37,26 +37,28 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     setLoading(true);
-    const { data: members } = await supabase
-      .from('team_members')
-      .select('tenant_id')
-      .eq('user_id', user.id)
-      .eq('is_active', true);
-    const tenantIds = [...new Set((members ?? []).map((m) => m.tenant_id))];
-    if (tenantIds.length === 0) {
-      setTenants([]);
-      setCurrentTenantIdState(null);
+    try {
+      const { data: members } = await supabase
+        .from('team_members')
+        .select('tenant_id')
+        .eq('user_id', user.id)
+        .eq('is_active', true);
+      const tenantIds = [...new Set((members ?? []).map((m) => m.tenant_id))];
+      if (tenantIds.length === 0) {
+        setTenants([]);
+        setCurrentTenantIdState(null);
+        return;
+      }
+      const { data: tenantRows } = await supabase.from('tenants').select('id, name, created_at, updated_at').in('id', tenantIds);
+      const list = (tenantRows ?? []) as Tenant[];
+      setTenants(list);
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      const current = list.some((t) => t.id === stored) ? stored : list[0]?.id ?? null;
+      setCurrentTenantIdState(current);
+      if (current) window.localStorage.setItem(STORAGE_KEY, current);
+    } finally {
       setLoading(false);
-      return;
     }
-    const { data: tenantRows } = await supabase.from('tenants').select('id, name, created_at, updated_at').in('id', tenantIds);
-    const list = (tenantRows ?? []) as Tenant[];
-    setTenants(list);
-    const stored = window.localStorage.getItem(STORAGE_KEY);
-    const current = list.some((t) => t.id === stored) ? stored : list[0]?.id ?? null;
-    setCurrentTenantIdState(current);
-    if (current) window.localStorage.setItem(STORAGE_KEY, current);
-    setLoading(false);
   }, [user?.id]);
 
   useEffect(() => {
@@ -69,13 +71,16 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     else window.localStorage.removeItem(STORAGE_KEY);
   }, []);
 
-  const value: TenantContextValue = {
-    tenants,
-    currentTenantId,
-    setCurrentTenantId,
-    loading,
-    refetchTenants,
-  };
+  const value = useMemo<TenantContextValue>(
+    () => ({
+      tenants,
+      currentTenantId,
+      setCurrentTenantId,
+      loading,
+      refetchTenants,
+    }),
+    [tenants, currentTenantId, setCurrentTenantId, loading, refetchTenants]
+  );
 
   return <TenantContext.Provider value={value}>{children}</TenantContext.Provider>;
 }

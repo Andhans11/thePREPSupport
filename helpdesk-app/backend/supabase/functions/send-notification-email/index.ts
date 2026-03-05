@@ -34,25 +34,18 @@ function escapeHtml(s: string): string {
     .replace(/\n/g, '<br>');
 }
 
-/** Build multipart/alternative (plain + HTML) raw message for new ticket. */
-function buildNewTicketEmail(params: {
+/** Build multipart/alternative (plain + HTML) raw message. */
+function buildNotificationEmail(params: {
   fromHeader: string;
   to: string;
   subjectEncoded: string;
-  ticketNumber: string;
-  subject: string;
+  title: string;
+  bodyText: string;
   ticketLink: string;
 }): string {
-  const { fromHeader, to, subjectEncoded, ticketNumber, subject, ticketLink } = params;
+  const { fromHeader, to, subjectEncoded, title, bodyText, ticketLink } = params;
   const boundary = 'np_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
-  const plain = [
-    'En ny sak er opprettet i support-helpdesken.',
-    '',
-    `Saksnummer: ${ticketNumber || '–'}`,
-    `Emne: ${subject}`,
-    '',
-    `Åpne saken her: ${ticketLink}`,
-  ].join('\r\n');
+  const plain = [title, bodyText ? '\n' + bodyText : '', '', `Åpne i appen: ${ticketLink}`].join('\n').trim();
   const html = `<!DOCTYPE html>
 <html lang="no">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
@@ -60,17 +53,13 @@ function buildNewTicketEmail(params: {
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;padding:32px 16px;">
     <tr><td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,0.08);overflow:hidden;">
-        <tr><td style="background:linear-gradient(135deg,#059669 0%,#047857 100%);padding:24px 28px;">
+        <tr><td style="background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%);padding:24px 28px;">
           <span style="font-size:18px;font-weight:600;color:#ffffff;letter-spacing:-0.02em;">thePREP Support</span>
-          <p style="margin:8px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">Ny sak opprettet</p>
         </td></tr>
         <tr><td style="padding:28px;">
-          <h1 style="margin:0 0 20px;font-size:20px;font-weight:600;color:#111827;line-height:1.3;">En ny sak er opprettet i support-helpdesken.</h1>
-          <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;">
-            <tr><td style="padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#6b7280;">Saksnummer</td><td style="padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:14px;font-weight:500;color:#111827;">${escapeHtml(ticketNumber || '–')}</td></tr>
-            <tr><td style="padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#6b7280;">Emne</td><td style="padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;">${escapeHtml(subject)}</td></tr>
-          </table>
-          <a href="${escapeHtml(ticketLink)}" style="display:inline-block;padding:12px 24px;background:#059669;color:#ffffff!important;text-decoration:none;font-size:15px;font-weight:500;border-radius:8px;">Åpne saken</a>
+          <h1 style="margin:0 0 16px;font-size:20px;font-weight:600;color:#111827;line-height:1.3;">${escapeHtml(title)}</h1>
+          ${bodyText ? `<div style="font-size:15px;line-height:1.6;color:#4b5563;margin-bottom:24px;">${escapeHtml(bodyText)}</div>` : ''}
+          <a href="${escapeHtml(ticketLink)}" style="display:inline-block;padding:12px 24px;background:#2563eb;color:#ffffff!important;text-decoration:none;font-size:15px;font-weight:500;border-radius:8px;">Åpne i appen</a>
         </td></tr>
         <tr><td style="padding:16px 28px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">
           Denne e-posten ble sendt fra thePREP Support. Du kan styre varsler under Innstillinger → Brukere.
@@ -129,7 +118,7 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
 
-  let body: { ticket_id: string; tenant_id?: string | null; app_url?: string | null } = {};
+  let body: { record?: { id?: string; user_id?: string; tenant_id?: string; title?: string; body?: string | null; link?: string | null } } = {};
   try {
     if (req.body) body = await req.json();
   } catch {
@@ -139,82 +128,39 @@ serve(async (req) => {
     });
   }
 
-  const { ticket_id: ticketId, tenant_id: bodyTenantId, app_url: appUrl } = body;
-  if (!ticketId?.trim()) {
-    return new Response(JSON.stringify({ error: 'Missing ticket_id' }), {
+  const record = body.record ?? body;
+  const notificationId = record.id ?? (body as { id?: string }).id;
+  const userId = record.user_id ?? (body as { user_id?: string }).user_id;
+  const tenantId = record.tenant_id ?? (body as { tenant_id?: string }).tenant_id;
+  const title = record.title ?? (body as { title?: string }).title ?? '';
+  const bodyText = record.body ?? (body as { body?: string }).body ?? '';
+  const link = record.link ?? (body as { link?: string }).link;
+
+  if (!userId || !tenantId) {
+    return new Response(JSON.stringify({ error: 'Missing user_id or tenant_id' }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
-  const { data: ticket, error: ticketErr } = await serviceSupabase
-    .from('tickets')
-    .select('id, tenant_id, ticket_number, subject, customer_id')
-    .eq('id', ticketId.trim())
-    .single();
-
-  if (ticketErr || !ticket) {
-    return new Response(JSON.stringify({ error: 'Ticket not found' }), {
-      status: 404,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  }
-
-  const tenantId = bodyTenantId ?? (ticket as { tenant_id?: string }).tenant_id;
-  if (!tenantId) {
-    return new Response(JSON.stringify({ error: 'Could not determine tenant' }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  }
-
-  const authHeader = req.headers.get('Authorization');
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.slice(7);
-    if (serviceRoleKey && token === serviceRoleKey) {
-      // Server-side call (e.g. from sync-gmail-emails cron): allow without user check
-    } else {
-      const userSupabase = createClient(
-        Deno.env.get('SUPABASE_URL') ?? '',
-        Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-        { global: { headers: { Authorization: `Bearer ${token}` } } }
-      );
-      const { data: { user } } = await userSupabase.auth.getUser(token);
-      if (!user) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-          status: 401,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-      const { data: member } = await serviceSupabase
-        .from('team_members')
-        .select('id')
-        .eq('tenant_id', tenantId)
-        .eq('user_id', user.id)
-        .eq('is_active', true)
-        .maybeSingle();
-      if (!member) {
-        return new Response(JSON.stringify({ error: 'Access denied to this tenant' }), {
-          status: 403,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-    }
-  }
-
-  const { data: subscribers } = await serviceSupabase
+  const { data: member, error: memberErr } = await serviceSupabase
     .from('team_members')
-    .select('id, email, name')
+    .select('id, email, email_on_notifications')
     .eq('tenant_id', tenantId)
-    .eq('email_on_new_ticket', true)
-    .not('email', 'is', null)
-    .not('user_id', 'is', null);
+    .eq('user_id', userId)
+    .eq('is_active', true)
+    .maybeSingle();
 
-  const list = (subscribers ?? []) as { id: string; email: string; name?: string | null }[];
-  const toSend = list.filter((r) => r.email?.trim());
-  if (toSend.length === 0) {
-    return new Response(JSON.stringify({ success: true, sent: 0 }), {
+  if (memberErr || !member) {
+    return new Response(JSON.stringify({ success: true, sent: 0, reason: 'member_not_found' }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const wantEmail = (member as { email_on_notifications?: boolean }).email_on_notifications === true;
+  const email = (member as { email?: string }).email?.trim();
+  if (!wantEmail || !email) {
+    return new Response(JSON.stringify({ success: true, sent: 0, reason: 'email_disabled_or_missing' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
@@ -229,7 +175,7 @@ serve(async (req) => {
 
   if (!gmailRow?.refresh_token) {
     return new Response(
-      JSON.stringify({ error: 'Ingen e-postkonto er koblet til for denne organisasjonen. Konfigurer Gmail under E-post innbokser.' }),
+      JSON.stringify({ error: 'Ingen e-postkonto er koblet til for denne organisasjonen.' }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
@@ -253,43 +199,44 @@ serve(async (req) => {
     oauthRow.client_secret.trim()
   );
 
+  const appUrlEnv = (Deno.env.get('APP_URL') || '').trim();
+  const baseUrl = (appUrlEnv && appUrlEnv !== 'APP_URL' && appUrlEnv.startsWith('http') ? appUrlEnv : 'https://the-prep-support.vercel.app').replace(/\/$/, '');
+  const ticketLink = link?.startsWith('/') ? `${baseUrl}${link}` : (link || baseUrl);
   const row = gmailRow as { email_address?: string; group_email?: string | null };
   const fromAddress = (row.group_email?.trim() || row.email_address?.trim() || '').trim() || row.email_address || '';
   const fromDisplay = row.group_email?.trim() ? 'thePREP support' : 'Support';
 
-  const ticketNumber = (ticket as { ticket_number?: string | null })?.ticket_number?.trim() || '';
-  const subject = (ticket as { subject?: string | null })?.subject?.trim() || '(Ingen emne)';
-  const subjectLine = ticketNumber ? `Ny sak: ${ticketNumber} – ${subject}` : `Ny sak: ${subject}`;
-  const subjectNormalized = subjectLine.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim();
-
-  const appUrlEnv = (appUrl?.trim() || Deno.env.get('APP_URL') || '').trim();
-  const baseUrl = (appUrlEnv && appUrlEnv !== 'APP_URL' && appUrlEnv.startsWith('http') ? appUrlEnv : 'https://the-prep-support.vercel.app').replace(/\/$/, '');
-  const ticketLink = `${baseUrl}/tickets?view=all&select=${(ticket as { id: string }).id}`;
+  const subjectLine = title.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim().slice(0, 200);
   const fromHeader = `From: ${fromDisplay} <${fromAddress}>`;
-  let sent = 0;
-  for (const rec of toSend) {
-    const to = rec.email.trim();
-    const raw = buildNewTicketEmail({
-      fromHeader,
-      to,
-      subjectEncoded: encodeSubjectUtf8(subjectNormalized),
-      ticketNumber,
-      subject,
-      ticketLink,
-    });
-    const encoded = encodeBase64Url(raw);
-    const sendRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ raw: encoded }),
-    });
-    if (sendRes.ok) sent++;
+  const raw = buildNotificationEmail({
+    fromHeader,
+    to: email,
+    subjectEncoded: encodeSubjectUtf8(subjectLine),
+    title,
+    bodyText,
+    ticketLink,
+  });
+  const encoded = encodeBase64Url(raw);
+
+  const sendRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ raw: encoded }),
+  });
+
+  if (!sendRes.ok) {
+    const errText = await sendRes.text();
+    return new Response(
+      JSON.stringify({ error: 'Failed to send email', details: errText }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
   }
 
-  return new Response(JSON.stringify({ success: true, sent }), {
-    headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-  });
+  return new Response(
+    JSON.stringify({ success: true, sent: 1, notification_id: notificationId }),
+    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
 });

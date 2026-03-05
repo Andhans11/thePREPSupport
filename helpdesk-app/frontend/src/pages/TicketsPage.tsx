@@ -13,6 +13,7 @@ const VIEWS: { view: AssignmentView; label: string }[] = [
   { view: 'unassigned', label: 'Ufordelte' },
   { view: 'team', label: 'Team' },
   { view: 'all', label: 'Alle åpne saker' },
+  { view: 'closed', label: 'Lukket' },
   { view: 'archived', label: 'Arkivert' },
 ];
 
@@ -22,6 +23,7 @@ const VIEW_LABELS: Record<AssignmentView, string> = {
   unassigned: 'Ufordelte',
   team: 'Team',
   archived: 'Arkivert',
+  closed: 'Lukket',
 };
 
 export function TicketsPage() {

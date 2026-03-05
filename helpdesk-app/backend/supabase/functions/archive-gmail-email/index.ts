@@ -1,6 +1,14 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
+const corsHeaders: Record<string, string> = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Max-Age': '86400',
+};
+const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
+
 const GOOGLE_CLIENT_ID = Deno.env.get('GOOGLE_CLIENT_ID');
 const GOOGLE_CLIENT_SECRET = Deno.env.get('GOOGLE_CLIENT_SECRET');
 
@@ -22,14 +30,14 @@ async function getAccessToken(refreshToken: string): Promise<string> {
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: { 'Access-Control-Allow-Origin': '*' } });
+    return new Response(null, { status: 204, headers: corsHeaders });
   }
 
   const authHeader = req.headers.get('Authorization');
   if (!authHeader?.startsWith('Bearer ')) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders,
     });
   }
 
@@ -44,7 +52,7 @@ serve(async (req) => {
   if (!user) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders,
     });
   }
 
@@ -54,7 +62,7 @@ serve(async (req) => {
   } catch {
     return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders,
     });
   }
 
@@ -73,7 +81,7 @@ serve(async (req) => {
   if (!gmailRow?.refresh_token) {
     return new Response(JSON.stringify({ error: 'Gmail not connected' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders,
     });
   }
 
@@ -82,20 +90,31 @@ serve(async (req) => {
   if (!messageId) {
     return new Response(JSON.stringify({ error: 'Missing gmailMessageId or threadId' }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' },
+      headers: jsonHeaders,
     });
   }
 
-  await fetch(`https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/modify`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ removeLabelIds: ['INBOX'] }),
-  });
+  const archiveRes = await fetch(
+    `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/modify`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ removeLabelIds: ['INBOX'] }),
+    }
+  );
+
+  if (!archiveRes.ok) {
+    const details = await archiveRes.text();
+    return new Response(
+      JSON.stringify({ error: 'Failed to archive email', details }),
+      { status: 502, headers: jsonHeaders }
+    );
+  }
 
   return new Response(JSON.stringify({ success: true }), {
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders,
   });
 });

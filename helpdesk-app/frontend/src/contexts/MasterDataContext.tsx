@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from 'react';
@@ -50,29 +51,37 @@ export function MasterDataProvider({ children }: { children: ReactNode }) {
       return;
     }
     setLoading(true);
-    const [statusRes, categoryRes] = await Promise.all([
-      supabase
-        .from('ticket_statuses')
-        .select('id, code, label, sort_order, color, description, color_hex')
-        .eq('tenant_id', currentTenantId)
-        .order('sort_order'),
-      supabase
-        .from('ticket_categories')
-        .select('id, name, description, sort_order, color_hex')
-        .eq('tenant_id', currentTenantId)
-        .order('sort_order'),
-    ]);
-    setStatuses((statusRes.data as TicketStatusRow[]) ?? []);
-    setCategories((categoryRes.data as TicketCategoryRow[]) ?? []);
-    setLoading(false);
+    try {
+      const [statusRes, categoryRes] = await Promise.all([
+        supabase
+          .from('ticket_statuses')
+          .select('id, code, label, sort_order, color, description, color_hex')
+          .eq('tenant_id', currentTenantId)
+          .order('sort_order'),
+        supabase
+          .from('ticket_categories')
+          .select('id, name, description, sort_order, color_hex')
+          .eq('tenant_id', currentTenantId)
+          .order('sort_order'),
+      ]);
+      setStatuses((statusRes.data as TicketStatusRow[]) ?? []);
+      setCategories((categoryRes.data as TicketCategoryRow[]) ?? []);
+    } finally {
+      setLoading(false);
+    }
   }, [currentTenantId]);
 
   useEffect(() => {
     refetch();
   }, [refetch, currentTenantId]);
 
+  const value = useMemo(
+    () => ({ statuses, categories, loading, refetch }),
+    [statuses, categories, loading, refetch]
+  );
+
   return (
-    <MasterDataContext.Provider value={{ statuses, categories, loading, refetch }}>
+    <MasterDataContext.Provider value={value}>
       {children}
     </MasterDataContext.Provider>
   );

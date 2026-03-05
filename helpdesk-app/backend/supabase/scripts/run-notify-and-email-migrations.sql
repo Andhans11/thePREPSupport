@@ -1,0 +1,6 @@
+-- Run these in Supabase Dashboard → SQL Editor as TWO separate runs to avoid deadlocks:
+--
+-- 1) Run: run-notify-migration-part1.sql  (function + trigger on messages)
+-- 2) After it succeeds, run: run-notify-migration-part2.sql  (email_on_notifications column)
+--
+-- Do not run both in one query.

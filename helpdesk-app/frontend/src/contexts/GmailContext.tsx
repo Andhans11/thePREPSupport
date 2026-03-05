@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { getGmailAuthUrl } from '../services/gmail';
 import { exchangeOAuthCodeForTokens, triggerGmailSync, disconnectGmail } from '../services/api';
@@ -82,49 +82,52 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
       return;
     }
-    const [gmailRes, cronRes, lastResultRes] = await Promise.all([
-      supabase
-        .from('gmail_sync')
-        .select('id, user_id, email_address, group_email, is_active, last_sync_at, created_at, updated_at')
-        .eq('user_id', user.id)
-        .eq('tenant_id', currentTenantId)
-        .eq('is_active', true)
-        .maybeSingle(),
-      supabase
-        .from('gmail_sync_cron_last_run')
-        .select('last_run_at')
-        .eq('id', 1)
-        .maybeSingle(),
-      supabase
-        .from('gmail_sync_last_result')
-        .select('last_run_at, created_count')
-        .eq('tenant_id', currentTenantId)
-        .maybeSingle(),
-    ]);
-    const gmailData = gmailRes.data as GmailSyncRow | null;
-    const cronRow = cronRes.data as { last_run_at?: string } | null;
-    const cronLastRunAt = cronRow?.last_run_at ?? null;
-    setGmailSync(gmailData ?? null);
-    setCronLastRunAt(cronLastRunAt);
+    try {
+      const [gmailRes, cronRes, lastResultRes] = await Promise.all([
+        supabase
+          .from('gmail_sync')
+          .select('id, user_id, email_address, group_email, is_active, last_sync_at, created_at, updated_at')
+          .eq('user_id', user.id)
+          .eq('tenant_id', currentTenantId)
+          .eq('is_active', true)
+          .maybeSingle(),
+        supabase
+          .from('gmail_sync_cron_last_run')
+          .select('last_run_at')
+          .eq('id', 1)
+          .maybeSingle(),
+        supabase
+          .from('gmail_sync_last_result')
+          .select('last_run_at, created_count')
+          .eq('tenant_id', currentTenantId)
+          .maybeSingle(),
+      ]);
+      const gmailData = gmailRes.data as GmailSyncRow | null;
+      const cronRow = cronRes.data as { last_run_at?: string } | null;
+      const cronLastRunAt = cronRow?.last_run_at ?? null;
+      setGmailSync(gmailData ?? null);
+      setCronLastRunAt(cronLastRunAt);
 
-    const inboxLastSync = gmailData?.last_sync_at ?? null;
-    const lastSyncAt =
-      inboxLastSync && cronLastRunAt
-        ? new Date(inboxLastSync) > new Date(cronLastRunAt)
-          ? inboxLastSync
-          : cronLastRunAt
-        : inboxLastSync ?? cronLastRunAt;
-    const lastResult = lastResultRes.data as { last_run_at?: string; created_count?: number } | null;
-    if (
-      lastSyncAt &&
-      lastResult?.last_run_at != null &&
-      Math.abs(new Date(lastResult.last_run_at).getTime() - new Date(lastSyncAt).getTime()) <= LAST_SYNC_CREATED_TOLERANCE_MS
-    ) {
-      setLastSyncNewTicketsCount(lastResult.created_count ?? 0);
-    } else {
-      setLastSyncNewTicketsCount(null);
+      const inboxLastSync = gmailData?.last_sync_at ?? null;
+      const lastSyncAt =
+        inboxLastSync && cronLastRunAt
+          ? new Date(inboxLastSync) > new Date(cronLastRunAt)
+            ? inboxLastSync
+            : cronLastRunAt
+          : inboxLastSync ?? cronLastRunAt;
+      const lastResult = lastResultRes.data as { last_run_at?: string; created_count?: number } | null;
+      if (
+        lastSyncAt &&
+        lastResult?.last_run_at != null &&
+        Math.abs(new Date(lastResult.last_run_at).getTime() - new Date(lastSyncAt).getTime()) <= LAST_SYNC_CREATED_TOLERANCE_MS
+      ) {
+        setLastSyncNewTicketsCount(lastResult.created_count ?? 0);
+      } else {
+        setLastSyncNewTicketsCount(null);
+      }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }, [currentTenantId]);
 
   useEffect(() => {
@@ -267,25 +270,46 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     }
   }, [currentTenantId, lastSyncAt]);
 
-  const value: GmailContextValue = {
-    isConnected: !!gmailSync,
-    gmailEmail: gmailSync?.email_address ?? null,
-    groupEmail: gmailSync?.group_email ?? null,
-    lastSyncAt,
-    lastSyncNewTicketsCount,
-    loading,
-    syncing,
-    savingGroupEmail,
-    error,
-    connectGmail,
-    isGmailOAuthConfigured: !!tenantOAuthClientId?.trim(),
-    handleOAuthCallback,
-    syncNow,
-    disconnect,
-    updateGroupEmail,
-    clearError: () => setError(null),
-    refetchTenantOAuth: fetchTenantOAuth,
-  };
+  const clearError = useCallback(() => setError(null), []);
+
+  const value = useMemo<GmailContextValue>(
+    () => ({
+      isConnected: !!gmailSync,
+      gmailEmail: gmailSync?.email_address ?? null,
+      groupEmail: gmailSync?.group_email ?? null,
+      lastSyncAt,
+      lastSyncNewTicketsCount,
+      loading,
+      syncing,
+      savingGroupEmail,
+      error,
+      connectGmail,
+      isGmailOAuthConfigured: !!tenantOAuthClientId?.trim(),
+      handleOAuthCallback,
+      syncNow,
+      disconnect,
+      updateGroupEmail,
+      clearError,
+      refetchTenantOAuth: fetchTenantOAuth,
+    }),
+    [
+      gmailSync,
+      lastSyncAt,
+      lastSyncNewTicketsCount,
+      loading,
+      syncing,
+      savingGroupEmail,
+      error,
+      connectGmail,
+      tenantOAuthClientId,
+      handleOAuthCallback,
+      syncNow,
+      disconnect,
+      updateGroupEmail,
+      clearError,
+      fetchTenantOAuth,
+    ]
+  );
 
   return <GmailContext.Provider value={value}>{children}</GmailContext.Provider>;
 }

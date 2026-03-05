@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -445,11 +446,14 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     };
   }, [currentTenantId, refetch]);
 
-  const value: DashboardContextValue = {
-    ...state,
-    loading,
-    refetch,
-  };
+  const value = useMemo<DashboardContextValue>(
+    () => ({
+      ...state,
+      loading,
+      refetch,
+    }),
+    [state, loading, refetch]
+  );
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;
 }

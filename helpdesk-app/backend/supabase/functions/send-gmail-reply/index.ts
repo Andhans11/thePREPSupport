@@ -143,13 +143,20 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
 
-  const { data: ticket } = await serviceSupabase
+  const { data: ticket, error: ticketError } = await serviceSupabase
     .from('tickets')
     .select('gmail_thread_id, tenant_id, subject, ticket_number')
     .eq('id', ticketId)
-    .single();
+    .maybeSingle();
 
-  if (!ticket?.gmail_thread_id) {
+  if (ticketError || !ticket) {
+    return new Response(JSON.stringify({ error: 'Ticket not found' }), {
+      status: 404,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  if (!ticket.gmail_thread_id) {
     const { error: insertErr } = await serviceSupabase.from('messages').insert({
       ticket_id: ticketId,
       tenant_id: ticket.tenant_id,

@@ -254,10 +254,8 @@ async function runSyncForGmailRow(
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
   if (!listRes.ok) {
-    return new Response(JSON.stringify({ error: 'Gmail list failed', details: await listRes.text() }), {
-      status: 502,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    const details = await listRes.text();
+    throw new Error(`Gmail list failed: ${details}`);
   }
 
   const list = await listRes.json();

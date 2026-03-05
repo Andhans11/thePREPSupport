@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { useTickets } from '../../contexts/TicketContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
@@ -9,9 +9,10 @@ import { isAdmin } from '../../types/roles';
 import { formatListTime } from '../../utils/formatters';
 import type { Ticket } from '../../types/ticket';
 import { StatusBadge } from './StatusBadge';
-import { Search, Plus, Archive, Trash2, UserPlus, User, MessageCircle, X } from 'lucide-react';
+import { Search, Plus, Archive, Trash2, UserPlus, User, MessageCircle, X, ChevronLeft, ChevronRight } from 'lucide-react';
 
 const ARCHIVED_STATUS = 'archived';
+const SEARCH_DEBOUNCE_MS = 400;
 
 const PRIORITY_LABELS: Record<string, string> = {
   low: 'Lav',
@@ -33,7 +34,7 @@ function formatDueInfo(dueDate: string | null): { text: string; isOverdue: boole
   return { text: `${diffDays} dager`, isOverdue: false };
 }
 
-function TicketRow({
+const TicketRow = memo(function TicketRow({
   ticket,
   categories,
   assigneeName,
@@ -49,10 +50,10 @@ function TicketRow({
   assigneeName: string | null;
   hasUnreadCustomerReply: boolean;
   isSelected: boolean;
-  onSelect: () => void;
-  onArchive?: () => void;
-  onDelete?: () => void;
-  onAssignToMe?: () => void;
+  onSelect: (ticket: Ticket) => void;
+  onArchive?: (ticketId: string) => void;
+  onDelete?: (ticketId: string) => void;
+  onAssignToMe?: (ticketId: string) => void;
 }) {
   const senderName = ticket.customer?.name || ticket.customer?.email || 'Ukjent';
   const senderEmail = ticket.customer?.email ?? null;
@@ -70,7 +71,7 @@ function TicketRow({
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            onAssignToMe();
+            onAssignToMe(ticket.id);
           }}
           className="shrink-0 p-2 flex items-center justify-center text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-accent)] transition-colors self-center"
           title="Tildel til meg"
@@ -81,7 +82,7 @@ function TicketRow({
       )}
       <button
         type="button"
-        onClick={onSelect}
+        onClick={() => onSelect(ticket)}
         className={`flex-1 min-w-0 text-left px-3 py-3 hover:bg-[var(--hiver-bg)] transition-colors flex gap-2 items-center ${
           isSelected ? 'bg-[var(--hiver-selected-bg)]' : ''
         }`}
@@ -164,7 +165,7 @@ function TicketRow({
       {onArchive && (
         <button
           type="button"
-          onClick={onArchive}
+          onClick={() => onArchive(ticket.id)}
           className="shrink-0 p-1.5 rounded text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-border)] hover:text-[var(--hiver-text)] self-center"
           title="Arkiver sak"
           aria-label="Arkiver sak"
@@ -175,7 +176,7 @@ function TicketRow({
       {onDelete && (
         <button
           type="button"
-          onClick={onDelete}
+          onClick={() => onDelete(ticket.id)}
           className="shrink-0 p-1.5 rounded text-[var(--hiver-text-muted)] hover:bg-red-100 hover:text-red-600 self-center"
           title="Slett sak"
           aria-label="Slett sak"
@@ -185,7 +186,7 @@ function TicketRow({
       )}
     </li>
   );
-}
+});
 
 interface TicketListProps {
   listHeaderTitle: string;
@@ -198,7 +199,7 @@ interface TicketListProps {
 }
 
 export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, onSelectTicket, overlayCloseButton }: TicketListProps) {
-  const { tickets, selectedTicket, selectTicket, ticketIdsWithUnreadCustomerMessage, loading, error, fetchTickets, loadMoreTickets, updateTicket, deleteTicket, assignmentView, loadingMore, hasMoreTickets } = useTickets();
+  const { tickets, selectedTicket, selectTicket, ticketIdsWithUnreadCustomerMessage, loading, error, fetchTickets, updateTicket, deleteTicket, assignmentView, totalCount, currentPage, totalPages, goToPage } = useTickets();
   const { user } = useAuth();
   const { role } = useCurrentUserRole();
   const { currentTenantId } = useTenant();
@@ -206,7 +207,8 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, o
   const [statusFilter, setStatusFilter] = useState<string>('');
   const [search, setSearch] = useState('');
   const [assigneeNames, setAssigneeNames] = useState<Record<string, string>>({});
-  const loadMoreSentinelRef = useRef<HTMLDivElement>(null);
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevSearchRef = useRef<string>('');
 
   useEffect(() => {
     if (!currentTenantId) {
@@ -228,40 +230,67 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, o
       });
   }, [currentTenantId]);
 
-  useEffect(() => {
-    if (!hasMoreTickets || loadingMore) return;
-    const el = loadMoreSentinelRef.current;
-    if (!el) return;
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) loadMoreTickets();
-      },
-      { root: el.parentElement, rootMargin: '200px', threshold: 0 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [hasMoreTickets, loadingMore, loadMoreTickets]);
-
   const isArchivedView = assignmentView === 'archived';
-  const listTickets = isArchivedView
-    ? tickets
-    : tickets.filter((t) => t.status !== ARCHIVED_STATUS && (assignmentView !== 'all' || t.status !== 'closed'));
+  /** When top tab is Lukket or Arkivert, the list filter is forced so only that chip is active. */
+  const effectiveStatusFilter =
+    assignmentView === 'closed' ? 'closed' : assignmentView === 'archived' ? 'archived' : statusFilter;
+  /** API returns only non-closed, non-archived by default; closed/archived only when that view or status filter is active. */
+  const listTickets = tickets;
   const showArchiveButton = !isArchivedView;
   const showDeleteButton = isArchivedView && isAdmin(role);
 
-  const applyFilters = (status?: string) => {
-    const nextStatus = status !== undefined ? status : statusFilter;
-    fetchTickets({
-      status: nextStatus || undefined,
-      search: search.trim() || undefined,
-      assignmentView,
-      userId: user?.id ?? null,
-    });
-  };
+  // Sync list filter with top tab: when user selects Lukket or Arkivert tab, only that filter is active
+  useEffect(() => {
+    if (assignmentView === 'closed') setStatusFilter('closed');
+    else if (assignmentView === 'archived') setStatusFilter('archived');
+    else setStatusFilter('');
+  }, [assignmentView]);
 
-  const handleSearch = () => applyFilters();
+  const applyFilters = useCallback(
+    (status?: string) => {
+      const nextStatus = status !== undefined ? status : statusFilter;
+      fetchTickets({
+        status: nextStatus || undefined,
+        search: search.trim() || undefined,
+        assignmentView,
+        userId: user?.id ?? null,
+      });
+    },
+    [statusFilter, search, assignmentView, user?.id, fetchTickets]
+  );
+
+  const applyFiltersRef = useRef(applyFilters);
+  applyFiltersRef.current = applyFilters;
+
+  useEffect(() => {
+    const trimmed = search.trim();
+    if (trimmed === prevSearchRef.current) return;
+    prevSearchRef.current = trimmed;
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => {
+      searchDebounceRef.current = null;
+      applyFiltersRef.current();
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+  }, [search]);
+
+  const handleSearch = () => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
+    prevSearchRef.current = search.trim();
+    applyFilters();
+  };
   const hasSearchText = search.trim().length > 0;
   const clearSearch = () => {
+    prevSearchRef.current = '';
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current);
+      searchDebounceRef.current = null;
+    }
     setSearch('');
     fetchTickets({
       status: statusFilter || undefined,
@@ -271,6 +300,8 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, o
     });
   };
   const handleQuickFilter = (code: string) => {
+    // When top tab is Lukket or Arkivert, only that filter is active; ignore other chip clicks
+    if (assignmentView === 'closed' || assignmentView === 'archived') return;
     const next = code === '' || statusFilter === code ? '' : code;
     setStatusFilter(next);
     fetchTickets({
@@ -280,6 +311,32 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, o
       userId: user?.id ?? null,
     });
   };
+
+  const handleSelectTicket = useCallback(
+    (ticket: Ticket) => {
+      selectTicket(ticket);
+      onSelectTicket?.();
+    },
+    [selectTicket, onSelectTicket]
+  );
+  const handleArchive = useCallback(
+    (ticketId: string) => updateTicket(ticketId, { status: ARCHIVED_STATUS }),
+    [updateTicket]
+  );
+  const handleDelete = useCallback(
+    (ticketId: string) => {
+      if (window.confirm('Er du sikker på at du vil slette denne saken permanent? Denne handlingen kan ikke angres.')) {
+        deleteTicket(ticketId);
+      }
+    },
+    [deleteTicket]
+  );
+  const handleAssignToMe = useCallback(
+    (ticketId: string) => {
+      if (user?.id) updateTicket(ticketId, { assigned_to: user.id, status: 'pending' });
+    },
+    [updateTicket, user?.id]
+  );
 
   return (
     <div className="flex flex-col h-full w-full bg-[var(--hiver-panel-bg)]">
@@ -340,28 +397,52 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, o
               type="button"
               onClick={() => handleQuickFilter('')}
               className={`px-2.5 py-1 rounded-md text-xs font-medium ${
-                !statusFilter
+                !effectiveStatusFilter
                   ? 'bg-[var(--hiver-accent)] text-white'
                   : 'bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-border)] hover:text-[var(--hiver-text)]'
               }`}
             >
-              Alle
+              Alle åpne
             </button>
-            {statuses.map((s) => (
+            {statuses.filter((s) => s.code !== 'closed' && s.code !== 'archived').map((s) => (
               <button
                 key={s.id}
                 type="button"
                 onClick={() => handleQuickFilter(s.code)}
                 className={`px-2.5 py-1 rounded-md text-xs font-medium ${
-                  statusFilter === s.code
+                  effectiveStatusFilter === s.code
                     ? 'text-white'
                     : 'bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-border)] hover:text-[var(--hiver-text)]'
                 }`}
-                style={statusFilter === s.code && s.color_hex ? { backgroundColor: s.color_hex } : undefined}
+                style={effectiveStatusFilter === s.code && s.color_hex ? { backgroundColor: s.color_hex } : undefined}
               >
                 {s.label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => handleQuickFilter('closed')}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium ${
+                effectiveStatusFilter === 'closed'
+                  ? 'text-white'
+                  : 'bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-border)] hover:text-[var(--hiver-text)]'
+              }`}
+              style={effectiveStatusFilter === 'closed' ? { backgroundColor: 'var(--status-closed, #7a7a7a)' } : undefined}
+            >
+              Lukket
+            </button>
+            <button
+              type="button"
+              onClick={() => handleQuickFilter('archived')}
+              className={`px-2.5 py-1 rounded-md text-xs font-medium ${
+                effectiveStatusFilter === 'archived'
+                  ? 'text-white'
+                  : 'bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-border)] hover:text-[var(--hiver-text)]'
+              }`}
+              style={effectiveStatusFilter === 'archived' ? { backgroundColor: 'var(--status-archived, #6b7280)' } : undefined}
+            >
+              Arkivert
+            </button>
           </div>
         </div>
       </div>
@@ -377,6 +458,7 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, o
           <div className="p-4 text-[var(--hiver-text-muted)] text-sm">Ingen samtaler.</div>
         ) : (
           <>
+            {/* Future: virtualize list (e.g. react-window) for very long ticket lists */}
             <ul className="divide-y divide-[var(--hiver-border)]">
               {listTickets.map((ticket: Ticket) => (
                 <TicketRow
@@ -386,33 +468,38 @@ export function TicketList({ listHeaderTitle, filteringModeLabel, onNewTicket, o
                   assigneeName={ticket.assigned_to ? (assigneeNames[ticket.assigned_to] ?? 'Ukjent') : null}
                   hasUnreadCustomerReply={ticketIdsWithUnreadCustomerMessage.has(ticket.id)}
                   isSelected={selectedTicket?.id === ticket.id}
-                  onSelect={() => {
-                    selectTicket(ticket);
-                    onSelectTicket?.();
-                  }}
-                  onArchive={showArchiveButton ? () => updateTicket(ticket.id, { status: ARCHIVED_STATUS }) : undefined}
-                  onDelete={
-                    showDeleteButton
-                      ? () => {
-                          if (window.confirm('Er du sikker på at du vil slette denne saken permanent? Denne handlingen kan ikke angres.')) {
-                            deleteTicket(ticket.id);
-                          }
-                        }
-                      : undefined
-                  }
-                  onAssignToMe={
-                    user && !ticket.assigned_to
-                      ? () => updateTicket(ticket.id, { assigned_to: user.id, status: 'pending' })
-                      : undefined
-                  }
+                  onSelect={handleSelectTicket}
+                  onArchive={showArchiveButton ? handleArchive : undefined}
+                  onDelete={showDeleteButton ? handleDelete : undefined}
+                  onAssignToMe={user && !ticket.assigned_to ? handleAssignToMe : undefined}
                 />
               ))}
             </ul>
-            {hasMoreTickets && (
-              <div ref={loadMoreSentinelRef} className="min-h-[1px]" aria-hidden>
-                {loadingMore && (
-                  <div className="py-3 text-center text-sm text-[var(--hiver-text-muted)]">Laster flere…</div>
-                )}
+            {totalPages > 1 && (
+              <div className="shrink-0 flex items-center justify-between gap-2 px-3 py-2 border-t border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)]">
+                <span className="text-xs text-[var(--hiver-text-muted)]">
+                  Side {currentPage} av {totalPages} ({totalCount} saker)
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => goToPage(currentPage - 1)}
+                    disabled={currentPage <= 1 || loading}
+                    className="p-1.5 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)] disabled:opacity-50 disabled:pointer-events-none"
+                    aria-label="Forrige side"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => goToPage(currentPage + 1)}
+                    disabled={currentPage >= totalPages || loading}
+                    className="p-1.5 rounded-lg border border-[var(--hiver-border)] text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)] disabled:opacity-50 disabled:pointer-events-none"
+                    aria-label="Neste side"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             )}
           </>

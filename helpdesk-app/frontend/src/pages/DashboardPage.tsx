@@ -566,10 +566,12 @@ export function DashboardPage() {
         </div>
       )}
 
-      {/* Bento grid: infographic + week chart, trendline, then Recent + Team. */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-5 lg:grid-rows-[auto_auto_1fr]">
-        {/* Infographic: Åpen, Mine, Ufordelt */}
-        <div className="lg:col-span-2 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+      {/* Two columns when Brukere visible: left = all content (full width cards), right = Brukere full height */}
+      <div className={`grid gap-4 lg:gap-5 items-stretch ${showTeamStatus ? 'grid-cols-1 lg:grid-cols-[1fr_minmax(280px,360px)]' : 'grid-cols-1'}`}>
+        {/* Left column: all dashboard cards, each full width */}
+        <div className="flex flex-col gap-4 lg:gap-5 min-w-0">
+          {/* Infographic: Åpen, Mine, Ufordelt */}
+          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
           <div className="p-5 lg:p-6">
             <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider mb-4">
               Saker nå
@@ -589,10 +591,10 @@ export function DashboardPage() {
               </div>
             </div>
           </div>
-        </div>
+          </div>
 
-        {/* This week: opened tickets by day */}
-        <div className="lg:col-span-2 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          {/* This week: opened tickets by day */}
+          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
           <div className="p-5 lg:p-6 flex flex-col h-full">
             <div className="flex items-center gap-2 mb-4">
               <BarChart3 className="w-5 h-5 text-[var(--hiver-accent)]" />
@@ -616,11 +618,11 @@ export function DashboardPage() {
               ))}
             </div>
           </div>
-        </div>
+          </div>
 
-        {/* Last 30 days: opened vs closed trendline (manager + admin only) */}
-        {showAnalytics && (
-          <div className="lg:col-span-4 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          {/* Last 30 days: opened vs closed trendline (manager + admin only) */}
+          {showAnalytics && (
+          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
             <div className="p-5 lg:p-6 flex flex-col">
               <div className="flex items-center gap-2 mb-4">
                 <TrendingUp className="w-5 h-5 text-[var(--hiver-accent)]" />
@@ -641,10 +643,10 @@ export function DashboardPage() {
               </div>
             </div>
           </div>
-        )}
+          )}
 
-        {/* Bento: Recent tickets with tabs Mine / Ufordelte (full width when Brukere hidden) */}
-        <div className={`md:col-span-2 lg:row-span-2 flex flex-col min-h-[280px] lg:min-h-0 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm ${showTeamStatus ? 'lg:col-span-2' : 'lg:col-span-4'} ${showAnalytics ? 'lg:row-start-3' : 'lg:row-start-2'}`}>
+          {/* Recent tickets with tabs Mine / Ufordelte */}
+          <div className="flex flex-col min-h-[280px] card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
           <div className="flex items-center justify-between px-5 lg:px-6 py-3 border-b border-[var(--hiver-border)] shrink-0">
             <div className="flex items-center gap-2">
               <Ticket className="w-5 h-5 text-[var(--hiver-accent)]" />
@@ -719,11 +721,12 @@ export function DashboardPage() {
               );
             })()}
           </div>
+          </div>
         </div>
 
-        {/* Bento: Team status (admin + manager only) */}
+        {/* Right column: Brukere only (admin + manager), full height */}
         {showTeamStatus && (
-          <div className={`md:col-span-2 lg:col-span-2 lg:row-span-2 flex flex-col min-h-[280px] lg:min-h-0 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm ${showAnalytics ? 'lg:row-start-3' : 'lg:row-start-2'}`}>
+          <div className="flex flex-col min-h-[280px] lg:min-h-0 h-full card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
             <div className="flex items-center gap-2 px-5 lg:px-6 py-4 border-b border-[var(--hiver-border)] shrink-0">
               <Users className="w-5 h-5 text-[var(--hiver-text-muted)]" />
               <h2 className="text-base font-semibold text-[var(--hiver-text)]">Brukere</h2>

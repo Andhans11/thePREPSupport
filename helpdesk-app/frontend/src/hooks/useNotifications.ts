@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
+import { useToast } from '../contexts/ToastContext';
 import { supabase } from '../services/supabase';
 
 export interface NotificationRow {
@@ -14,10 +15,12 @@ export interface NotificationRow {
 
 const DEFAULT_LIMIT = 20;
 
-export function useNotifications(options: { limit?: number; unreadOnly?: boolean } = {}) {
+export function useNotifications(options: { limit?: number; unreadOnly?: boolean; showToasts?: boolean } = {}) {
   const { user } = useAuth();
   const { currentTenantId } = useTenant();
+  const toast = useToast();
   const limit = options.limit ?? DEFAULT_LIMIT;
+  const showToasts = options.showToasts ?? true;
   const unreadOnly = options.unreadOnly ?? false;
   const [items, setItems] = useState<NotificationRow[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -79,7 +82,12 @@ export function useNotifications(options: { limit?: number; unreadOnly?: boolean
           table: 'notifications',
           filter: `user_id=eq.${user.id}`,
         },
-        () => {
+        (payload) => {
+          if (showToasts && payload.new) {
+            const n = payload.new as { title?: string; body?: string | null; link?: string | null };
+            const message = n.title ? (n.body ? `${n.title}: ${n.body}` : n.title) : 'Ny varsel';
+            toast.info(message.slice(0, 200), 6000);
+          }
           fetchNotifications();
         }
       )
@@ -99,7 +107,7 @@ export function useNotifications(options: { limit?: number; unreadOnly?: boolean
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [user?.id, fetchNotifications]);
+  }, [user?.id, fetchNotifications, showToasts, toast]);
 
   const markAsRead = useCallback(
     async (id: string) => {

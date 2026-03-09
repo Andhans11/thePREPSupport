@@ -31,7 +31,12 @@ export function SettingsPage() {
   return (
     <div className="flex flex-col h-full w-full">
       <div className="shrink-0 w-full p-4 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)]">
-        <h1 className="text-xl font-semibold text-[var(--hiver-text)]">Innstillinger</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-xl font-semibold text-[var(--hiver-text)]">Innstillinger</h1>
+          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)] border border-[var(--hiver-border)]">
+            v{__APP_VERSION__}
+          </span>
+        </div>
         <p className="text-sm text-[var(--hiver-text-muted)] mt-0.5">
           Selskap, team og svarmaler.
         </p>

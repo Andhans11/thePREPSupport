@@ -153,7 +153,8 @@ serve(async (req) => {
     } catch {
       message = 'Token exchange failed: ' + details;
     }
-    return new Response(JSON.stringify({ error: message, details: errText }), {
+    console.error('oauth-gmail-callback: token exchange failed', errText);
+    return new Response(JSON.stringify({ error: message }), {
       status: 400,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -197,7 +198,7 @@ serve(async (req) => {
 
   if (upsertError) {
     console.error('oauth-gmail-callback: upsert failed', upsertError.message);
-    return new Response(JSON.stringify({ error: upsertError.message }), {
+    return new Response(JSON.stringify({ error: 'Failed to save Gmail credentials. Please try again.' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });

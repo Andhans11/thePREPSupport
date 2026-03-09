@@ -536,7 +536,8 @@ serve(async (req) => {
       .select('user_id, tenant_id, refresh_token, group_email, email_address')
       .eq('is_active', true);
     if (error) {
-      return new Response(JSON.stringify({ error: error.message }), {
+      console.error('sync-gmail-emails: failed to fetch gmail_sync rows', error.message);
+      return new Response(JSON.stringify({ error: 'Failed to fetch sync configuration' }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

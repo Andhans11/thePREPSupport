@@ -229,8 +229,9 @@ serve(async (req) => {
 
   if (!sendRes.ok) {
     const errText = await sendRes.text();
+    console.error('send-notification-email: Gmail API send failed', errText);
     return new Response(
-      JSON.stringify({ error: 'Failed to send email', details: errText }),
+      JSON.stringify({ error: 'Failed to send email' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

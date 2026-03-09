@@ -167,7 +167,8 @@ serve(async (req) => {
       is_customer: false,
     });
     if (insertErr) {
-      return new Response(JSON.stringify({ error: insertErr.message }), {
+      console.error('send-gmail-reply: message insert failed', insertErr.message);
+      return new Response(JSON.stringify({ error: 'Failed to save message' }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

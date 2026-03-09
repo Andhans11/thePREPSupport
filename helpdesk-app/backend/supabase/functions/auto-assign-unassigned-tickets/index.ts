@@ -54,8 +54,9 @@ serve(async (req) => {
     .lt('created_at', cutoffIso);
 
   if (fetchErr) {
+    console.error('auto-assign: failed to fetch tickets', fetchErr.message);
     return new Response(
-      JSON.stringify({ error: 'Failed to fetch tickets', details: fetchErr.message }),
+      JSON.stringify({ error: 'Failed to fetch tickets' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

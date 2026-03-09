@@ -9,7 +9,7 @@ export function compileTemplate(
   context: Record<string, unknown> = {}
 ): string {
   try {
-    const template = Handlebars.compile(content, { noEscape: true });
+    const template = Handlebars.compile(content);
     return template(context);
   } catch {
     return content;

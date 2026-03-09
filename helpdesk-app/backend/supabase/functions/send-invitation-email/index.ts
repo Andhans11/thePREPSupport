@@ -100,7 +100,7 @@ serve(async (req) => {
 
   if (rpcError || !invData?.ok) {
     return new Response(
-      JSON.stringify({ error: (invData as { error?: string })?.error ?? rpcError?.message ?? 'Invitation not found' }),
+      JSON.stringify({ error: (invData as { error?: string })?.error ?? 'Invitation not found' }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

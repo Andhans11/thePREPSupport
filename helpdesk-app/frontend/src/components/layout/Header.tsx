@@ -3,8 +3,10 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useGmail } from '../../contexts/GmailContext';
 import { useTickets } from '../../contexts/TicketContext';
+import { useTenant } from '../../contexts/TenantContext';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
 import { useNotifications } from '../../hooks/useNotifications';
+import { supabase } from '../../services/supabase';
 import { formatDateTime } from '../../utils/formatters';
 import { getNotificationIcon } from '../../utils/notificationIcons';
 import { isAdmin, canAccessSettings } from '../../types/roles';
@@ -23,6 +25,38 @@ import {
   List,
   RefreshCw,
 } from 'lucide-react';
+
+function ToggleSwitch({
+  checked,
+  onChange,
+  disabled,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  label?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-0 transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--hiver-accent)] focus-visible:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+        checked ? 'bg-[var(--hiver-accent)]' : 'bg-[var(--hiver-border)]'
+      }`}
+      aria-label={label}
+    >
+      <span
+        className={`pointer-events-none absolute top-1/2 inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-all duration-200 -translate-y-1/2 ${
+          checked ? 'left-[22px]' : 'left-0.5'
+        }`}
+      />
+    </button>
+  );
+}
 
 function getInitials(email: string, fullName?: string | null): string {
   if (fullName && fullName.trim()) {
@@ -51,6 +85,7 @@ function formatNotificationTime(created_at: string): string {
 export function Header() {
   const { user, signOut } = useAuth();
   const navigate = useNavigate();
+  const { currentTenantId } = useTenant();
   const [userOpen, setUserOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -63,6 +98,13 @@ export function Header() {
   const { fetchTickets } = useTickets();
   const { items: notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications({ unreadOnly: true });
   const admin = isAdmin(role);
+  const [notifPrefs, setNotifPrefs] = useState({
+    notify_owner_assignment: true,
+    notify_owner_activity: true,
+    notify_team_activity: true,
+    notify_team_changes: true,
+  });
+  const [prefsSaving, setPrefsSaving] = useState(false);
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -114,6 +156,49 @@ export function Header() {
 
   const initials = user?.email ? getInitials(user.email, user.user_metadata?.full_name) : '?';
   const displayName = user?.user_metadata?.full_name || user?.email;
+
+  useEffect(() => {
+    const loadPrefs = async () => {
+      if (!user?.id || !currentTenantId || !userOpen) return;
+      const { data } = await supabase
+        .from('team_members')
+        .select('notify_owner_assignment, notify_owner_activity, notify_team_activity, notify_team_changes')
+        .eq('tenant_id', currentTenantId)
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .maybeSingle();
+      const row = (data as {
+        notify_owner_assignment?: boolean;
+        notify_owner_activity?: boolean;
+        notify_team_activity?: boolean;
+        notify_team_changes?: boolean;
+      } | null) ?? null;
+      if (row) {
+        setNotifPrefs({
+          notify_owner_assignment: row.notify_owner_assignment !== false,
+          notify_owner_activity: row.notify_owner_activity !== false,
+          notify_team_activity: row.notify_team_activity !== false,
+          notify_team_changes: row.notify_team_changes !== false,
+        });
+      }
+    };
+    loadPrefs();
+  }, [user?.id, currentTenantId, userOpen]);
+
+  const savePref = async (
+    key: 'notify_owner_assignment' | 'notify_owner_activity' | 'notify_team_activity' | 'notify_team_changes',
+    value: boolean
+  ) => {
+    if (!user?.id || !currentTenantId) return;
+    setPrefsSaving(true);
+    setNotifPrefs((prev) => ({ ...prev, [key]: value }));
+    await supabase
+      .from('team_members')
+      .update({ [key]: value })
+      .eq('tenant_id', currentTenantId)
+      .eq('user_id', user.id);
+    setPrefsSaving(false);
+  };
 
   return (
     <header className="h-14 border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] flex items-center justify-between gap-4 px-4 shrink-0">
@@ -337,6 +422,45 @@ export function Header() {
                   checked={availableForEmail}
                   onChange={(e) => setAvailableForEmail(e.target.checked)}
                   className="rounded border-[var(--hiver-border)] text-[var(--hiver-accent)] focus:ring-[var(--hiver-accent)]"
+                />
+              </label>
+            </div>
+            <div className="p-3 border-b border-[var(--hiver-border)] space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-[var(--hiver-text-muted)]">E-postvarsler</p>
+              <label className="flex items-center justify-between gap-3 text-sm text-[var(--hiver-text)]">
+                <span>Email ved tildelt sak</span>
+                <ToggleSwitch
+                  checked={notifPrefs.notify_owner_assignment}
+                  onChange={(v) => savePref('notify_owner_assignment', v)}
+                  disabled={prefsSaving}
+                  label="Email ved tildelt sak"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-[var(--hiver-text)]">
+                <span>Email ved tildelt til team</span>
+                <ToggleSwitch
+                  checked={notifPrefs.notify_team_changes}
+                  onChange={(v) => savePref('notify_team_changes', v)}
+                  disabled={prefsSaving}
+                  label="Email ved tildelt til team"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-[var(--hiver-text)]">
+                <span>Email ved svar til meg</span>
+                <ToggleSwitch
+                  checked={notifPrefs.notify_owner_activity}
+                  onChange={(v) => savePref('notify_owner_activity', v)}
+                  disabled={prefsSaving}
+                  label="Email ved svar til meg"
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-[var(--hiver-text)]">
+                <span>Email ved svar til team</span>
+                <ToggleSwitch
+                  checked={notifPrefs.notify_team_activity}
+                  onChange={(v) => savePref('notify_team_activity', v)}
+                  disabled={prefsSaving}
+                  label="Email ved svar til team"
                 />
               </label>
             </div>

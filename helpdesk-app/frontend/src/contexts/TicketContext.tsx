@@ -3,6 +3,7 @@ import type { Ticket, TicketInsert, TicketUpdate } from '../types/ticket';
 import type { Message } from '../types/message';
 import { supabase } from '../services/supabase';
 import { notifyNewTicket } from '../services/api';
+import { GMAIL_SYNC_COMPLETED_EVENT } from './GmailContext';
 import { useAuth } from './AuthContext';
 import { useTenant } from './TenantContext';
 
@@ -437,6 +438,12 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'gmail_sync_cron_last_run' }, () => {
         fetchTicketsRef.current();
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gmail_sync' }, () => {
+        fetchTicketsRef.current();
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'gmail_sync_last_result' }, () => {
+        fetchTicketsRef.current();
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'messages' }, (payload) => {
         const ticketId = (payload.new as { ticket_id?: string }).ticket_id;
         if (ticketId && ticketId === realtimeRef.current.selectedTicketId) {
@@ -454,6 +461,24 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
     return () => {
       supabase.removeChannel(channel);
     };
+  }, [currentTenantId]);
+
+  useEffect(() => {
+    if (!currentTenantId || typeof window === 'undefined') return;
+    const onSyncCompleted = () => {
+      fetchTicketsRef.current();
+    };
+    window.addEventListener(GMAIL_SYNC_COMPLETED_EVENT, onSyncCompleted);
+    return () => window.removeEventListener(GMAIL_SYNC_COMPLETED_EVENT, onSyncCompleted);
+  }, [currentTenantId]);
+
+  // Fallback refresh in case realtime events are dropped (network/sleep/tab throttling).
+  useEffect(() => {
+    if (!currentTenantId) return;
+    const interval = setInterval(() => {
+      fetchTicketsRef.current();
+    }, 15000);
+    return () => clearInterval(interval);
   }, [currentTenantId]);
 
   const createTicket = async (data: TicketInsert): Promise<Ticket | null> => {

@@ -49,6 +49,7 @@ export function CompanySettings() {
   const [info, setInfo] = useState<CompanyInfo>(defaultCompanyInfo);
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [expectedSolutionDays, setExpectedSolutionDays] = useState<number>(0);
+  const [emailSenderOnNewTicket, setEmailSenderOnNewTicket] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
@@ -59,10 +60,11 @@ export function CompanySettings() {
   useEffect(() => {
     if (!currentTenantId) return;
     (async () => {
-      const [infoRes, logoRes, solutionRes] = await Promise.all([
+      const [infoRes, logoRes, solutionRes, senderToggleRes] = await Promise.all([
         supabase.from('company_settings').select('value').eq('tenant_id', currentTenantId).eq('key', 'company_info').maybeSingle(),
         supabase.from('company_settings').select('value').eq('tenant_id', currentTenantId).eq('key', 'company_logo_url').maybeSingle(),
         supabase.from('company_settings').select('value').eq('tenant_id', currentTenantId).eq('key', 'expected_solution_days').maybeSingle(),
+        supabase.from('company_settings').select('value').eq('tenant_id', currentTenantId).eq('key', 'email_sender_on_new_ticket').maybeSingle(),
       ]);
       if (infoRes.error) {
         setInfo(defaultCompanyInfo);
@@ -73,6 +75,8 @@ export function CompanySettings() {
       setLogoUrl(typeof logoVal === 'string' ? logoVal : null);
       const daysVal = (solutionRes.data as { value: unknown } | null)?.value;
       setExpectedSolutionDays(typeof daysVal === 'number' ? daysVal : Number(daysVal) || 0);
+      const senderToggleVal = (senderToggleRes.data as { value: unknown } | null)?.value;
+      setEmailSenderOnNewTicket(senderToggleVal === true || senderToggleVal === 'true');
       setLoading(false);
     })();
   }, [currentTenantId]);
@@ -83,13 +87,17 @@ export function CompanySettings() {
     setSaved(false);
     setSaving(true);
     const days = Math.max(0, Math.min(365, expectedSolutionDays));
-    const [infoErr, daysErr] = await Promise.all([
+    const [infoErr, daysErr, senderToggleErr] = await Promise.all([
       supabase.from('company_settings').upsert(
         { tenant_id: currentTenantId, key: 'company_info', value: info, updated_at: new Date().toISOString() },
         { onConflict: 'tenant_id,key' }
       ),
       supabase.from('company_settings').upsert(
         { tenant_id: currentTenantId, key: 'expected_solution_days', value: days, updated_at: new Date().toISOString() },
+        { onConflict: 'tenant_id,key' }
+      ),
+      supabase.from('company_settings').upsert(
+        { tenant_id: currentTenantId, key: 'email_sender_on_new_ticket', value: emailSenderOnNewTicket, updated_at: new Date().toISOString() },
         { onConflict: 'tenant_id,key' }
       ),
     ]);
@@ -99,6 +107,9 @@ export function CompanySettings() {
     } else if (daysErr.error) {
       setError(daysErr.error.message || 'Kunne ikke lagre');
       toast.error(daysErr.error.message || 'Kunne ikke lagre selskapsopplysninger');
+    } else if (senderToggleErr.error) {
+      setError(senderToggleErr.error.message || 'Kunne ikke lagre');
+      toast.error(senderToggleErr.error.message || 'Kunne ikke lagre selskapsopplysninger');
     } else {
       setExpectedSolutionDays(days);
       setSaved(true);
@@ -344,6 +355,27 @@ export function CompanySettings() {
                 placeholder="0"
                 className={inputClass}
               />
+            </div>
+
+            <div className="mt-4">
+              <label className={labelClass}>Mottaksbekreftelse på e-post</label>
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={emailSenderOnNewTicket}
+                  onClick={() => setEmailSenderOnNewTicket((prev) => !prev)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/40 focus:ring-offset-2 ${emailSenderOnNewTicket ? 'bg-[var(--hiver-accent)]' : 'bg-[var(--hiver-border)]'}`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition ${emailSenderOnNewTicket ? 'translate-x-5' : 'translate-x-0.5'}`}
+                    style={{ marginTop: 2 }}
+                  />
+                </button>
+                <span className="text-sm text-[var(--hiver-text)]">
+                  Send automatisk svar med saksnummer til avsender når ny e-post oppretter sak
+                </span>
+              </div>
             </div>
 
             <SaveButton

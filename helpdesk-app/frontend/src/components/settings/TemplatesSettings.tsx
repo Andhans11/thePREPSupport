@@ -29,11 +29,43 @@ export function TemplatesSettings() {
   const [formName, setFormName] = useState('');
   const [formSubject, setFormSubject] = useState('');
   const [formContent, setFormContent] = useState('');
+  const [formContentHtml, setFormContentHtml] = useState('');
+  const [formEditorMode, setFormEditorMode] = useState<'text' | 'html' | 'preview'>('text');
   const [formCategory, setFormCategory] = useState('');
   const [ticketReceivedSubject, setTicketReceivedSubject] = useState('');
-  const [ticketReceivedContent, setTicketReceivedContent] = useState('');
+  const [ticketReceivedContentText, setTicketReceivedContentText] = useState('');
+  const [ticketReceivedContentHtml, setTicketReceivedContentHtml] = useState('');
+  const [ticketReceivedEditorMode, setTicketReceivedEditorMode] = useState<'text' | 'html' | 'preview'>('text');
+  const [newTicketNotificationSubject, setNewTicketNotificationSubject] = useState('');
+  const [newTicketNotificationContentText, setNewTicketNotificationContentText] = useState('');
+  const [newTicketNotificationContentHtml, setNewTicketNotificationContentHtml] = useState('');
+  const [newTicketNotificationEditorMode, setNewTicketNotificationEditorMode] = useState<'text' | 'html' | 'preview'>('text');
   const [emailSenderOnNewTicket, setEmailSenderOnNewTicket] = useState(false);
   const [ticketReceivedSaving, setTicketReceivedSaving] = useState(false);
+  const [newTicketNotificationSaving, setNewTicketNotificationSaving] = useState(false);
+
+  const getStandardEmailHtml = (bodyInnerHtml: string) =>
+    `<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+</head>
+<body style="margin:0;padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#f6f7fb;color:#111827;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;">
+    <tr>
+      <td style="padding:20px 24px;border-bottom:1px solid #e5e7eb;background:#fafafa;">
+        <img src="{{company.logo_url}}" alt="{{company.name}}" style="max-height:42px;width:auto;display:block;" />
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:24px;">
+        ${bodyInnerHtml}
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
 
   const fetchTemplates = async () => {
     if (!currentTenantId) return;
@@ -55,21 +87,53 @@ export function TemplatesSettings() {
 
   const fetchTicketReceivedSettings = async () => {
     if (!currentTenantId) return;
-    const { data } = await supabase
-      .from('company_settings')
-      .select('key, value')
-      .eq('tenant_id', currentTenantId)
-      .in('key', ['ticket_received_subject', 'ticket_received_content', 'email_sender_on_new_ticket']);
-    const rows = (data ?? []) as { key: string; value: unknown }[];
+    const [settingsRes, ticketReceivedTemplateRes] = await Promise.all([
+      supabase
+        .from('company_settings')
+        .select('key, value')
+        .eq('tenant_id', currentTenantId)
+        .in('key', ['ticket_received_subject', 'ticket_received_content', 'ticket_received_content_html', 'email_sender_on_new_ticket']),
+      supabase
+        .from('templates')
+        .select('subject, content')
+        .eq('tenant_id', currentTenantId)
+        .eq('category', 'ticket_received')
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+    const rows = (settingsRes.data ?? []) as { key: string; value: unknown }[];
     rows.forEach((r) => {
       if (r.key === 'email_sender_on_new_ticket') {
         setEmailSenderOnNewTicket(r.value === true || r.value === 'true');
       } else {
         const v = r.value != null ? (typeof r.value === 'string' ? r.value : String(r.value)) : '';
         if (r.key === 'ticket_received_subject') setTicketReceivedSubject(v);
-        if (r.key === 'ticket_received_content') setTicketReceivedContent(v);
+        if (r.key === 'ticket_received_content') setTicketReceivedContentText(v);
+        if (r.key === 'ticket_received_content_html') setTicketReceivedContentHtml(v);
       }
     });
+    const ticketReceivedTemplate = (ticketReceivedTemplateRes.data as { subject?: string | null; content?: string | null } | null) ?? null;
+    if (ticketReceivedTemplate?.subject != null) {
+      setTicketReceivedSubject(ticketReceivedTemplate.subject);
+    }
+    if (ticketReceivedTemplate?.content != null) {
+      setTicketReceivedContentText(ticketReceivedTemplate.content);
+    }
+    const { data: newTicketTemplate } = await supabase
+      .from('templates')
+      .select('subject, content')
+      .eq('tenant_id', currentTenantId)
+      .eq('category', 'new_ticket_notification')
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const row = (newTicketTemplate as { subject?: string | null; content?: string | null } | null) ?? null;
+    setNewTicketNotificationSubject(row?.subject ?? '');
+    setNewTicketNotificationContentHtml(row?.content ?? '');
+    setNewTicketNotificationContentText('');
   };
 
   useEffect(() => {
@@ -84,6 +148,8 @@ export function TemplatesSettings() {
     setFormName('');
     setFormSubject('');
     setFormContent('');
+    setFormContentHtml('');
+    setFormEditorMode('text');
     setFormCategory('');
     setEditingId(null);
     setCreating(false);
@@ -94,6 +160,8 @@ export function TemplatesSettings() {
     setFormName(t.name);
     setFormSubject(t.subject ?? '');
     setFormContent(t.content);
+    setFormContentHtml('');
+    setFormEditorMode('text');
     setFormCategory(t.category ?? '');
     setCreating(false);
   };
@@ -109,7 +177,7 @@ export function TemplatesSettings() {
     const payload = {
       name,
       subject: formSubject.trim() || null,
-      content: formContent,
+      content: (formEditorMode === 'html' ? formContentHtml : formContent).trim(),
       category: formCategory.trim() || null,
       is_active: true,
       updated_at: new Date().toISOString(),
@@ -165,20 +233,72 @@ export function TemplatesSettings() {
     if (!currentTenantId) return;
     setError(null);
     setTicketReceivedSaving(true);
-    const { error: e1 } = await supabase
-      .from('company_settings')
-      .upsert(
-        { tenant_id: currentTenantId, key: 'ticket_received_subject', value: ticketReceivedSubject },
-        { onConflict: 'tenant_id,key' }
-      );
-    const { error: e2 } = await supabase
-      .from('company_settings')
-      .upsert(
-        { tenant_id: currentTenantId, key: 'ticket_received_content', value: ticketReceivedContent },
-        { onConflict: 'tenant_id,key' }
-      );
-    if (e1 || e2) {
-      const msg = e1?.message || e2?.message || 'Kunne ikke lagre';
+    const [settingsSubjectRes, settingsContentRes, templateLookupRes] = await Promise.all([
+      supabase
+        .from('company_settings')
+        .upsert(
+          { tenant_id: currentTenantId, key: 'ticket_received_subject', value: ticketReceivedSubject },
+          { onConflict: 'tenant_id,key' }
+        ),
+      supabase
+        .from('company_settings')
+        .upsert(
+          { tenant_id: currentTenantId, key: 'ticket_received_content', value: ticketReceivedContentText },
+          { onConflict: 'tenant_id,key' }
+        ),
+      supabase
+        .from('company_settings')
+        .upsert(
+          { tenant_id: currentTenantId, key: 'ticket_received_content_html', value: ticketReceivedContentHtml },
+          { onConflict: 'tenant_id,key' }
+        ),
+      supabase
+        .from('templates')
+        .select('id')
+        .eq('tenant_id', currentTenantId)
+        .eq('category', 'ticket_received')
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ]);
+
+    let templateError: string | null = null;
+    const existingTemplateId = (templateLookupRes.data as { id?: string } | null)?.id;
+    if (existingTemplateId) {
+      const { error } = await supabase
+        .from('templates')
+        .update({
+          name: 'Mottaksbekreftelse (auto)',
+          subject: ticketReceivedSubject.trim() || null,
+          content: ticketReceivedContentText.trim() || '',
+          category: 'ticket_received',
+          is_active: true,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingTemplateId)
+        .eq('tenant_id', currentTenantId);
+      templateError = error?.message ?? null;
+    } else {
+      const { error } = await supabase
+        .from('templates')
+        .insert({
+          tenant_id: currentTenantId,
+          name: 'Mottaksbekreftelse (auto)',
+          subject: ticketReceivedSubject.trim() || null,
+          content: ticketReceivedContentText.trim() || '',
+          category: 'ticket_received',
+          is_active: true,
+          created_by: user?.id ?? null,
+        });
+      templateError = error?.message ?? null;
+    }
+
+    if (settingsSubjectRes.error || settingsContentRes.error || templateError) {
+      const msg =
+        settingsSubjectRes.error?.message ||
+        settingsContentRes.error?.message ||
+        templateError ||
+        'Kunne ikke lagre';
       setError(msg);
       toast.error(msg);
     } else {
@@ -187,8 +307,48 @@ export function TemplatesSettings() {
     setTicketReceivedSaving(false);
   };
 
+  const handleSaveNewTicketNotification = async () => {
+    if (!currentTenantId) return;
+    setError(null);
+    setNewTicketNotificationSaving(true);
+    const { data: existing } = await supabase
+      .from('templates')
+      .select('id')
+      .eq('tenant_id', currentTenantId)
+      .eq('category', 'new_ticket_notification')
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const existingId = (existing as { id?: string } | null)?.id;
+    const payload = {
+      name: 'Varsel ved ny sak (team/brukere)',
+      subject: newTicketNotificationSubject.trim() || null,
+      content: (newTicketNotificationEditorMode === 'html' ? newTicketNotificationContentHtml : newTicketNotificationContentText).trim(),
+      category: 'new_ticket_notification',
+      is_active: true,
+      updated_at: new Date().toISOString(),
+    };
+    const { error: e } = existingId
+      ? await supabase.from('templates').update(payload).eq('id', existingId).eq('tenant_id', currentTenantId)
+      : await supabase.from('templates').insert({
+          ...payload,
+          tenant_id: currentTenantId,
+          created_by: user?.id ?? null,
+        });
+    if (e) {
+      setError(e.message || 'Kunne ikke lagre');
+      toast.error(e.message || 'Kunne ikke lagre');
+    } else {
+      toast.success('Varselmal for ny sak er lagret');
+    }
+    setNewTicketNotificationSaving(false);
+  };
+
   const previewContent = formContent
     ? compileTemplate(formContent, TEMPLATE_VARIABLES_PREVIEW)
+    : '';
+  const previewHtmlContent = formContentHtml
+    ? compileTemplate(formContentHtml, TEMPLATE_VARIABLES_PREVIEW)
     : '';
 
   if (loading) {
@@ -199,8 +359,11 @@ export function TemplatesSettings() {
     );
   }
 
-  const ticketReceivedPreview = ticketReceivedContent
-    ? compileTemplate(ticketReceivedContent, TEMPLATE_VARIABLES_PREVIEW)
+  const ticketReceivedTextPreview = ticketReceivedContentText
+    ? compileTemplate(ticketReceivedContentText, TEMPLATE_VARIABLES_PREVIEW)
+    : '';
+  const ticketReceivedHtmlPreview = ticketReceivedContentHtml
+    ? compileTemplate(ticketReceivedContentHtml, TEMPLATE_VARIABLES_PREVIEW)
     : '';
 
   return (
@@ -244,7 +407,9 @@ export function TemplatesSettings() {
           <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{ticket_number}}'}</code>,{' '}
           <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{customer.name}}'}</code>,{' '}
           <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{customer.email}}'}</code>,{' '}
-          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{ticket.subject}}'}</code>.
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{ticket.subject}}'}</code>,{' '}
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{company.name}}'}</code>,{' '}
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{company.logo_url}}'}</code>.
         </p>
         <div className="grid gap-2">
           <label className="text-sm font-medium text-[var(--hiver-text)]">Emne (valgfritt)</label>
@@ -258,25 +423,176 @@ export function TemplatesSettings() {
         </div>
         <div className="grid gap-2">
           <label className="text-sm font-medium text-[var(--hiver-text)]">Innhold</label>
-          <textarea
-            value={ticketReceivedContent}
-            onChange={(e) => setTicketReceivedContent(e.target.value)}
-            placeholder={`Hei {{customer.name}},\n\nVi har mottatt din henvendelse. Din saksnummer er: {{ticket_number}}.\n\nVi kommer tilbake til deg så snart vi kan.\n\nMed vennlig hilsen,\nSupport`}
-            rows={6}
-            className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm font-mono text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
-          />
-        </div>
-        {ticketReceivedContent && (
-          <div className="rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-bg)] p-3">
-            <p className="text-xs font-medium text-[var(--hiver-text-muted)] mb-1">Forhåndsvisning</p>
-            <div className="text-sm text-[var(--hiver-text)] whitespace-pre-wrap">{ticketReceivedPreview}</div>
+          <div className="inline-flex w-fit rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-bg)] p-1">
+            <button
+              type="button"
+              onClick={() => setTicketReceivedEditorMode('text')}
+              className={`px-3 py-1.5 text-xs rounded-md ${ticketReceivedEditorMode === 'text' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}
+            >
+              Tekst
+            </button>
+            <button
+              type="button"
+              onClick={() => setTicketReceivedEditorMode('html')}
+              className={`px-3 py-1.5 text-xs rounded-md ${ticketReceivedEditorMode === 'html' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}
+            >
+              HTML
+            </button>
+            <button
+              type="button"
+              onClick={() => setTicketReceivedEditorMode('preview')}
+              className={`px-3 py-1.5 text-xs rounded-md ${ticketReceivedEditorMode === 'preview' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}
+            >
+              Preview
+            </button>
           </div>
-        )}
+          {ticketReceivedEditorMode === 'text' && (
+            <textarea
+              value={ticketReceivedContentText}
+              onChange={(e) => setTicketReceivedContentText(e.target.value)}
+              placeholder={`Hei {{customer.name}},\n\nVi har mottatt din henvendelse. Din saksnummer er: {{ticket_number}}.\n\nVi kommer tilbake til deg så snart vi kan.\n\nMed vennlig hilsen,\nSupport`}
+              rows={8}
+              className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm font-mono text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
+            />
+          )}
+          {ticketReceivedEditorMode === 'html' && (
+            <div className="space-y-2">
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setTicketReceivedContentHtml(
+                      getStandardEmailHtml('<p>Hei {{customer.name}},</p><p>Vi har mottatt henvendelsen din. Saksnummeret ditt er <strong>{{ticket_number}}</strong>.</p><p>Vi kommer tilbake til deg sa snart vi kan.</p><p>Med vennlig hilsen,<br>{{company.name}}</p>')
+                    )
+                  }
+                  className="px-2.5 py-1.5 text-xs rounded-md border border-[var(--hiver-border)] text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)]"
+                >
+                  Sett inn standard HTML-mal
+                </button>
+              </div>
+              <textarea
+                value={ticketReceivedContentHtml}
+                onChange={(e) => setTicketReceivedContentHtml(e.target.value)}
+                placeholder={'<p>Hei {{customer.name}},</p><p>Vi har mottatt henvendelsen din. Saksnummeret ditt er <strong>{{ticket_number}}</strong>.</p><p>Vi kommer tilbake til deg sa snart vi kan.</p><p>Med vennlig hilsen,<br>{{company.name}}</p>'}
+                rows={8}
+                className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm font-mono text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
+              />
+            </div>
+          )}
+          {ticketReceivedEditorMode === 'preview' && (
+            <div className="rounded-lg border border-[var(--hiver-border)] bg-white p-3 space-y-3">
+              <div>
+                <p className="text-xs font-medium text-[var(--hiver-text-muted)] mb-1">Tekst-forhåndsvisning</p>
+                <div className="text-sm text-[var(--hiver-text)] whitespace-pre-wrap">{ticketReceivedTextPreview || 'Ingen tekstinnhold enda.'}</div>
+              </div>
+              <div className="border-t border-[var(--hiver-border)] pt-3">
+                <p className="text-xs font-medium text-[var(--hiver-text-muted)] mb-1">HTML-forhåndsvisning</p>
+                {ticketReceivedHtmlPreview ? (
+                  <div className="text-sm text-[var(--hiver-text)]" dangerouslySetInnerHTML={{ __html: ticketReceivedHtmlPreview }} />
+                ) : (
+                  <div className="text-sm text-[var(--hiver-text-muted)]">Ingen HTML-innhold enda.</div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
         <SaveButton
           onClick={handleSaveTicketReceived}
           loading={ticketReceivedSaving}
         >
           Lagre mottaksbekreftelse
+        </SaveButton>
+      </div>
+
+      <div className="card-panel p-6 space-y-4">
+        <h3 className="text-sm font-semibold text-[var(--hiver-text)] flex items-center gap-2">
+          <MailCheck className="w-4 h-4 text-[var(--hiver-accent)]" />
+          Varsel ved ny sak (til team/brukere)
+        </h3>
+        <p className="text-sm text-[var(--hiver-text-muted)]">
+          Denne malen brukes for e-posten som sendes når ny sak opprettes. HTML er tillatt.
+          Variabler:{' '}
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{ticket_number}}'}</code>,{' '}
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{ticket.subject}}'}</code>,{' '}
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{team.name}}'}</code>,{' '}
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{ticket_link}}'}</code>,{' '}
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{company.name}}'}</code>,{' '}
+          <code className="px-1 py-0.5 rounded bg-[var(--hiver-bg)] text-xs">{'{{company.logo_url}}'}</code>.
+        </p>
+        <div className="grid gap-2">
+          <label className="text-sm font-medium text-[var(--hiver-text)]">Emne</label>
+          <input
+            type="text"
+            value={newTicketNotificationSubject}
+            onChange={(e) => setNewTicketNotificationSubject(e.target.value)}
+            placeholder="Ny sak: {{ticket_number}} - {{ticket.subject}}"
+            className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
+          />
+        </div>
+        <div className="grid gap-2">
+          <label className="text-sm font-medium text-[var(--hiver-text)]">Innhold</label>
+          <div className="inline-flex w-fit rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-bg)] p-1">
+            <button type="button" onClick={() => setNewTicketNotificationEditorMode('text')} className={`px-3 py-1.5 text-xs rounded-md ${newTicketNotificationEditorMode === 'text' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}>Tekst</button>
+            <button type="button" onClick={() => setNewTicketNotificationEditorMode('html')} className={`px-3 py-1.5 text-xs rounded-md ${newTicketNotificationEditorMode === 'html' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}>HTML</button>
+            <button type="button" onClick={() => setNewTicketNotificationEditorMode('preview')} className={`px-3 py-1.5 text-xs rounded-md ${newTicketNotificationEditorMode === 'preview' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}>Preview</button>
+          </div>
+          {newTicketNotificationEditorMode === 'text' && (
+            <textarea
+              value={newTicketNotificationContentText}
+              onChange={(e) => setNewTicketNotificationContentText(e.target.value)}
+              placeholder={'Ny sak opprettet\nSaksnummer: {{ticket_number}}\nEmne: {{ticket.subject}}\nTeam: {{team.name}}\n{{ticket_link}}'}
+              rows={8}
+              className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm font-mono text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
+            />
+          )}
+          {newTicketNotificationEditorMode === 'html' && (
+            <div className="space-y-2">
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setNewTicketNotificationContentHtml(
+                      getStandardEmailHtml('<h2>Ny sak opprettet</h2><p><strong>Saksnummer:</strong> {{ticket_number}}</p><p><strong>Emne:</strong> {{ticket.subject}}</p><p><strong>Team:</strong> {{team.name}}</p><p><a href="{{ticket_link}}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">Åpne saken</a></p>')
+                    )
+                  }
+                  className="px-2.5 py-1.5 text-xs rounded-md border border-[var(--hiver-border)] text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)]"
+                >
+                  Sett inn standard HTML-mal
+                </button>
+              </div>
+              <textarea
+                value={newTicketNotificationContentHtml}
+                onChange={(e) => setNewTicketNotificationContentHtml(e.target.value)}
+                placeholder={'<h2>Ny sak opprettet</h2>\n<p>Saksnummer: {{ticket_number}}</p>\n<p>Emne: {{ticket.subject}}</p>\n<p>Team: {{team.name}}</p>\n<p><a href="{{ticket_link}}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#2563eb;color:#ffffff;text-decoration:none;font-weight:600;">Åpne saken</a></p>'}
+                rows={8}
+                className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm font-mono text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
+              />
+            </div>
+          )}
+          {newTicketNotificationEditorMode === 'preview' && (
+            <div className="rounded-lg border border-[var(--hiver-border)] bg-white p-3 space-y-3">
+              <div>
+                <p className="text-xs font-medium text-[var(--hiver-text-muted)] mb-1">Tekst-forhandsvisning</p>
+                <div className="text-sm text-[var(--hiver-text)] whitespace-pre-wrap">
+                  {newTicketNotificationContentText ? compileTemplate(newTicketNotificationContentText, TEMPLATE_VARIABLES_PREVIEW) : 'Ingen tekstinnhold enda.'}
+                </div>
+              </div>
+              <div className="border-t border-[var(--hiver-border)] pt-3">
+                <p className="text-xs font-medium text-[var(--hiver-text-muted)] mb-1">HTML-forhandsvisning</p>
+                {newTicketNotificationContentHtml ? (
+                  <div className="text-sm text-[var(--hiver-text)]" dangerouslySetInnerHTML={{ __html: compileTemplate(newTicketNotificationContentHtml, TEMPLATE_VARIABLES_PREVIEW) }} />
+                ) : (
+                  <div className="text-sm text-[var(--hiver-text-muted)]">Ingen HTML-innhold enda.</div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        <SaveButton
+          onClick={handleSaveNewTicketNotification}
+          loading={newTicketNotificationSaving}
+        >
+          Lagre varselmal
         </SaveButton>
       </div>
 
@@ -344,20 +660,57 @@ export function TemplatesSettings() {
           </div>
           <div className="grid gap-2">
             <label className="text-sm font-medium text-[var(--hiver-text)]">Innhold (Handlebars støttes)</label>
-            <textarea
-              value={formContent}
-              onChange={(e) => setFormContent(e.target.value)}
-              placeholder={`Hi {{customer.name}},\n\nThanks for reaching out about {{ticket.subject}}.\n\nBest,\n{{agent.name}}`}
-              rows={8}
-              className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm font-mono text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
-            />
-          </div>
-          {formContent && (
-            <div className="rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-bg)] p-3">
-              <p className="text-xs font-medium text-[var(--hiver-text-muted)] mb-1">Forhåndsvisning med eksempeldata</p>
-              <div className="text-sm text-[var(--hiver-text)] whitespace-pre-wrap">{previewContent}</div>
+            <div className="inline-flex w-fit rounded-lg border border-[var(--hiver-border)] bg-[var(--hiver-bg)] p-1">
+              <button type="button" onClick={() => setFormEditorMode('text')} className={`px-3 py-1.5 text-xs rounded-md ${formEditorMode === 'text' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}>Tekst</button>
+              <button type="button" onClick={() => setFormEditorMode('html')} className={`px-3 py-1.5 text-xs rounded-md ${formEditorMode === 'html' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}>HTML</button>
+              <button type="button" onClick={() => setFormEditorMode('preview')} className={`px-3 py-1.5 text-xs rounded-md ${formEditorMode === 'preview' ? 'bg-white text-[var(--hiver-text)] shadow-sm' : 'text-[var(--hiver-text-muted)]'}`}>Preview</button>
             </div>
-          )}
+            {formEditorMode === 'text' && (
+              <textarea
+                value={formContent}
+                onChange={(e) => setFormContent(e.target.value)}
+                placeholder={`Hi {{customer.name}},\n\nThanks for reaching out about {{ticket.subject}}.\n\nBest,\n{{agent.name}}`}
+                rows={8}
+                className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm font-mono text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
+              />
+            )}
+            {formEditorMode === 'html' && (
+              <div className="space-y-2">
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setFormContentHtml(getStandardEmailHtml('<p>Hei {{customer.name}},</p><p>Takk for henvendelsen om <strong>{{ticket.subject}}</strong>.</p><p>Med vennlig hilsen,<br>{{agent.name}}</p>'))}
+                    className="px-2.5 py-1.5 text-xs rounded-md border border-[var(--hiver-border)] text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)]"
+                  >
+                    Sett inn standard HTML-mal
+                  </button>
+                </div>
+                <textarea
+                  value={formContentHtml}
+                  onChange={(e) => setFormContentHtml(e.target.value)}
+                  placeholder={'<p>Hei {{customer.name}},</p><p>Takk for henvendelsen om <strong>{{ticket.subject}}</strong>.</p><p>Med vennlig hilsen,<br>{{agent.name}}</p>'}
+                  rows={8}
+                  className="w-full rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm font-mono text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 resize-y"
+                />
+              </div>
+            )}
+            {formEditorMode === 'preview' && (
+              <div className="rounded-lg border border-[var(--hiver-border)] bg-white p-3 space-y-3">
+                <div>
+                  <p className="text-xs font-medium text-[var(--hiver-text-muted)] mb-1">Tekst-forhandsvisning</p>
+                  <div className="text-sm text-[var(--hiver-text)] whitespace-pre-wrap">{previewContent || 'Ingen tekstinnhold enda.'}</div>
+                </div>
+                <div className="border-t border-[var(--hiver-border)] pt-3">
+                  <p className="text-xs font-medium text-[var(--hiver-text-muted)] mb-1">HTML-forhandsvisning</p>
+                  {previewHtmlContent ? (
+                    <div className="text-sm text-[var(--hiver-text)]" dangerouslySetInnerHTML={{ __html: previewHtmlContent }} />
+                  ) : (
+                    <div className="text-sm text-[var(--hiver-text-muted)]">Ingen HTML-innhold enda.</div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
           <div className="flex gap-2">
             <SaveButton onClick={handleSave} loading={saving}>
               {editingId ? 'Lagre endringer' : 'Opprett mal'}

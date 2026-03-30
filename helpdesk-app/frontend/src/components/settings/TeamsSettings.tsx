@@ -9,6 +9,7 @@ export interface TeamRow {
   id: string;
   name: string;
   description: string | null;
+  email_on_new_ticket_to_members: boolean;
   created_at: string;
   updated_at: string;
   manager_team_member_id: string | null;
@@ -31,6 +32,7 @@ export function TeamsSettings() {
   const [formName, setFormName] = useState('');
   const [formDescription, setFormDescription] = useState('');
   const [formManagerId, setFormManagerId] = useState<string | null>(null);
+  const [formEmailOnNewTicketToMembers, setFormEmailOnNewTicketToMembers] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
   const [teamMembers, setTeamMembers] = useState<TeamMemberOption[]>([]);
 
@@ -40,7 +42,7 @@ export function TeamsSettings() {
     const [teamsRes, membersRes] = await Promise.all([
       supabase
         .from('teams')
-        .select('id, name, description, created_at, updated_at, manager_team_member_id')
+        .select('id, name, description, email_on_new_ticket_to_members, created_at, updated_at, manager_team_member_id')
         .eq('tenant_id', currentTenantId)
         .order('name'),
       supabase
@@ -77,18 +79,36 @@ export function TeamsSettings() {
     setSaving(id);
     const { error: e } = await supabase
       .from('teams')
-      .update({ name, description: formDescription.trim() || null, manager_team_member_id: formManagerId || null })
+      .update({
+        name,
+        description: formDescription.trim() || null,
+        manager_team_member_id: formManagerId || null,
+        email_on_new_ticket_to_members: formEmailOnNewTicketToMembers,
+      })
       .eq('id', id)
       .eq('tenant_id', currentTenantId);
     if (e) {
       setError(e.message);
       toast.error(e.message);
     } else {
-      setTeams((prev) => prev.map((t) => (t.id === id ? { ...t, name, description: formDescription.trim() || null, manager_team_member_id: formManagerId } : t)));
+      setTeams((prev) =>
+        prev.map((t) =>
+          t.id === id
+            ? {
+                ...t,
+                name,
+                description: formDescription.trim() || null,
+                manager_team_member_id: formManagerId,
+                email_on_new_ticket_to_members: formEmailOnNewTicketToMembers,
+              }
+            : t
+        )
+      );
       setEditingId(null);
       setFormName('');
       setFormDescription('');
       setFormManagerId(null);
+      setFormEmailOnNewTicketToMembers(false);
       toast.success('Team er oppdatert');
     }
     setSaving(null);
@@ -103,7 +123,12 @@ export function TeamsSettings() {
     setError(null);
     setSaving('add');
     if (!currentTenantId) return;
-    const { error: e } = await supabase.from('teams').insert({ tenant_id: currentTenantId, name, description: formDescription.trim() || null });
+    const { error: e } = await supabase.from('teams').insert({
+      tenant_id: currentTenantId,
+      name,
+      description: formDescription.trim() || null,
+      email_on_new_ticket_to_members: formEmailOnNewTicketToMembers,
+    });
     if (e) {
       setError(e.message);
       toast.error(e.message);
@@ -112,6 +137,7 @@ export function TeamsSettings() {
     }
     setFormName('');
     setFormDescription('');
+    setFormEmailOnNewTicketToMembers(false);
     setAdding(false);
     setSaving(null);
     await fetchTeams();
@@ -144,6 +170,7 @@ export function TeamsSettings() {
     setFormName(t.name);
     setFormDescription(t.description ?? '');
     setFormManagerId(t.manager_team_member_id ?? null);
+    setFormEmailOnNewTicketToMembers(!!t.email_on_new_ticket_to_members);
     setError(null);
   };
 
@@ -153,6 +180,7 @@ export function TeamsSettings() {
     setFormName('');
     setFormDescription('');
     setFormManagerId(null);
+    setFormEmailOnNewTicketToMembers(false);
     setError(null);
   };
 
@@ -206,6 +234,15 @@ export function TeamsSettings() {
               onChange={(e) => setFormDescription(e.target.value)}
               className="rounded-lg border border-[var(--hiver-border)] px-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30 sm:col-span-2"
             />
+            <label className="sm:col-span-2 inline-flex items-center gap-2 text-sm text-[var(--hiver-text)]">
+              <input
+                type="checkbox"
+                checked={formEmailOnNewTicketToMembers}
+                onChange={(e) => setFormEmailOnNewTicketToMembers(e.target.checked)}
+                className="h-4 w-4 rounded border-[var(--hiver-border)]"
+              />
+              Send e-post til alle teammedlemmer når en ny sak legges til i teamet
+            </label>
           </div>
           <div className="flex gap-2">
             <SaveButton
@@ -264,6 +301,15 @@ export function TeamsSettings() {
                         </select>
                         <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">Lederen ser alle saker i teamet og kan håndtere status for teammedlemmer.</p>
                       </div>
+                      <label className="sm:col-span-2 inline-flex items-center gap-2 text-sm text-[var(--hiver-text)]">
+                        <input
+                          type="checkbox"
+                          checked={formEmailOnNewTicketToMembers}
+                          onChange={(e) => setFormEmailOnNewTicketToMembers(e.target.checked)}
+                          className="h-4 w-4 rounded border-[var(--hiver-border)]"
+                        />
+                        Send e-post til alle teammedlemmer når en ny sak legges til i teamet
+                      </label>
                     </div>
                     <div className="flex gap-1">
                       <SaveButton
@@ -287,6 +333,9 @@ export function TeamsSettings() {
                         <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">
                           Leder: {teamMembers.find((m) => m.id === t.manager_team_member_id)?.name || teamMembers.find((m) => m.id === t.manager_team_member_id)?.email || '—'}
                         </p>
+                      )}
+                      {t.email_on_new_ticket_to_members && (
+                        <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">E-post ved ny sak i team: På</p>
                       )}
                     </div>
                     <div className="flex items-center gap-1 shrink-0">

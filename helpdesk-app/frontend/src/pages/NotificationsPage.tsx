@@ -3,6 +3,10 @@ import { useNotifications } from '../hooks/useNotifications';
 import { getNotificationIcon } from '../utils/notificationIcons';
 import { Bell, ChevronLeft } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { useTenant } from '../contexts/TenantContext';
+import { supabase } from '../services/supabase';
+import { useEffect, useState } from 'react';
 
 function formatNotificationTime(created_at: string): string {
   const d = new Date(created_at);
@@ -18,7 +22,84 @@ function formatNotificationTime(created_at: string): string {
 
 export function NotificationsPage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { currentTenantId } = useTenant();
   const { items: notifications, unreadCount, loading, markAsRead, markAllAsRead } = useNotifications({ limit: 100 });
+  const [prefsLoading, setPrefsLoading] = useState(true);
+  const [prefsSaving, setPrefsSaving] = useState(false);
+  const [prefs, setPrefs] = useState({
+    notify_owner_assignment: true,
+    notify_owner_activity: true,
+    notify_team_activity: true,
+    notify_team_changes: true,
+  });
+
+  useEffect(() => {
+    const loadPrefs = async () => {
+      if (!user?.id || !currentTenantId) {
+        setPrefsLoading(false);
+        return;
+      }
+      setPrefsLoading(true);
+      const { data } = await supabase
+        .from('team_members')
+        .select('notify_owner_assignment, notify_owner_activity, notify_team_activity, notify_team_changes')
+        .eq('tenant_id', currentTenantId)
+        .eq('user_id', user.id)
+        .eq('is_active', true)
+        .maybeSingle();
+      const row = (data as {
+        notify_owner_activity?: boolean;
+        notify_team_activity?: boolean;
+        notify_team_changes?: boolean;
+        notify_owner_assignment?: boolean;
+      } | null) ?? null;
+      if (row) {
+        setPrefs({
+          notify_owner_assignment: row.notify_owner_assignment !== false,
+          notify_owner_activity: row.notify_owner_activity !== false,
+          notify_team_activity: row.notify_team_activity !== false,
+          notify_team_changes: row.notify_team_changes !== false,
+        });
+      }
+      setPrefsLoading(false);
+    };
+    loadPrefs();
+  }, [user?.id, currentTenantId]);
+
+  const savePref = async (key: 'notify_owner_assignment' | 'notify_owner_activity' | 'notify_team_activity' | 'notify_team_changes', value: boolean) => {
+    if (!user?.id || !currentTenantId) return;
+    setPrefsSaving(true);
+    setPrefs((prev) => ({ ...prev, [key]: value }));
+    await supabase
+      .from('team_members')
+      .update({ [key]: value })
+      .eq('tenant_id', currentTenantId)
+      .eq('user_id', user.id);
+    setPrefsSaving(false);
+  };
+
+  const setAllPrefs = async (value: boolean) => {
+    if (!user?.id || !currentTenantId) return;
+    setPrefsSaving(true);
+    setPrefs({
+      notify_owner_assignment: value,
+      notify_owner_activity: value,
+      notify_team_activity: value,
+      notify_team_changes: value,
+    });
+    await supabase
+      .from('team_members')
+      .update({
+        notify_owner_assignment: value,
+        notify_owner_activity: value,
+        notify_team_activity: value,
+        notify_team_changes: value,
+      })
+      .eq('tenant_id', currentTenantId)
+      .eq('user_id', user.id);
+    setPrefsSaving(false);
+  };
 
   return (
     <div className="h-full flex flex-col bg-[var(--hiver-panel-bg)]">
@@ -50,6 +131,50 @@ export function NotificationsPage() {
       </div>
 
       <div className="flex-1 overflow-y-auto">
+        <div className="p-4 border-b border-[var(--hiver-border)] bg-[var(--hiver-bg)]/30">
+          <h2 className="text-sm font-semibold text-[var(--hiver-text)] mb-2">Mine varslingsinnstillinger</h2>
+          {prefsLoading ? (
+            <p className="text-xs text-[var(--hiver-text-muted)]">Laster innstillinger...</p>
+          ) : (
+            <div className="space-y-2">
+              <label className="flex items-center justify-between gap-3 text-sm text-[var(--hiver-text)]">
+                <span>Varsel ved tildelt sak (meg)</span>
+                <input type="checkbox" checked={prefs.notify_owner_assignment} disabled={prefsSaving} onChange={(e) => savePref('notify_owner_assignment', e.target.checked)} />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-[var(--hiver-text)]">
+                <span>Varsel på mine saker (eier/ansvarlig)</span>
+                <input type="checkbox" checked={prefs.notify_owner_activity} disabled={prefsSaving} onChange={(e) => savePref('notify_owner_activity', e.target.checked)} />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-[var(--hiver-text)]">
+                <span>Varsel på saker i mine team</span>
+                <input type="checkbox" checked={prefs.notify_team_activity} disabled={prefsSaving} onChange={(e) => savePref('notify_team_activity', e.target.checked)} />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-[var(--hiver-text)]">
+                <span>Varsel ved endringer i team-saker</span>
+                <input type="checkbox" checked={prefs.notify_team_changes} disabled={prefsSaving} onChange={(e) => savePref('notify_team_changes', e.target.checked)} />
+              </label>
+              <div className="pt-1">
+                <button
+                  type="button"
+                  onClick={() => setAllPrefs(false)}
+                  disabled={prefsSaving}
+                  className="text-xs font-medium text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)] underline"
+                >
+                  Skru av alle
+                </button>
+                <span className="mx-2 text-[var(--hiver-text-muted)]">|</span>
+                <button
+                  type="button"
+                  onClick={() => setAllPrefs(true)}
+                  disabled={prefsSaving}
+                  className="text-xs font-medium text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)] underline"
+                >
+                  Skru pa alle
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         {loading ? (
           <div className="p-8 text-center text-sm text-[var(--hiver-text-muted)]">
             Laster varsler…

@@ -34,52 +34,40 @@ function escapeHtml(s: string): string {
     .replace(/\n/g, '<br>');
 }
 
+function stripHtmlToPlain(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function applyTemplateVars(content: string, vars: Record<string, string>): string {
+  let out = content;
+  for (const [key, value] of Object.entries(vars)) {
+    const safe = value ?? '';
+    out = out.replace(new RegExp(`\\{\\{\\s*${key.replace('.', '\\.')}\\s*\\}\\}`, 'g'), safe);
+  }
+  return out;
+}
+
 /** Build multipart/alternative (plain + HTML) raw message for new ticket. */
 function buildNewTicketEmail(params: {
   fromHeader: string;
   to: string;
   subjectEncoded: string;
-  ticketNumber: string;
-  subject: string;
-  ticketLink: string;
+  plainBody: string;
+  htmlBody: string;
 }): string {
-  const { fromHeader, to, subjectEncoded, ticketNumber, subject, ticketLink } = params;
+  const { fromHeader, to, subjectEncoded, plainBody, htmlBody } = params;
   const boundary = 'np_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
-  const plain = [
-    'En ny sak er opprettet i support-helpdesken.',
-    '',
-    `Saksnummer: ${ticketNumber || '–'}`,
-    `Emne: ${subject}`,
-    '',
-    `Åpne saken her: ${ticketLink}`,
-  ].join('\r\n');
-  const html = `<!DOCTYPE html>
-<html lang="no">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen-Sans,Ubuntu,sans-serif;background-color:#f4f4f5;color:#1f2937;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;padding:32px 16px;">
-    <tr><td align="center">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,0.08);overflow:hidden;">
-        <tr><td style="background:linear-gradient(135deg,#059669 0%,#047857 100%);padding:24px 28px;">
-          <span style="font-size:18px;font-weight:600;color:#ffffff;letter-spacing:-0.02em;">thePREP Support</span>
-          <p style="margin:8px 0 0;font-size:14px;color:rgba(255,255,255,0.9);">Ny sak opprettet</p>
-        </td></tr>
-        <tr><td style="padding:28px;">
-          <h1 style="margin:0 0 20px;font-size:20px;font-weight:600;color:#111827;line-height:1.3;">En ny sak er opprettet i support-helpdesken.</h1>
-          <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;">
-            <tr><td style="padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#6b7280;">Saksnummer</td><td style="padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:14px;font-weight:500;color:#111827;">${escapeHtml(ticketNumber || '–')}</td></tr>
-            <tr><td style="padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#6b7280;">Emne</td><td style="padding:10px 0;border-bottom:1px solid #e5e7eb;font-size:14px;color:#111827;">${escapeHtml(subject)}</td></tr>
-          </table>
-          <a href="${escapeHtml(ticketLink)}" style="display:inline-block;padding:12px 24px;background:#059669;color:#ffffff!important;text-decoration:none;font-size:15px;font-weight:500;border-radius:8px;">Åpne saken</a>
-        </td></tr>
-        <tr><td style="padding:16px 28px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">
-          Denne e-posten ble sendt fra thePREP Support. Du kan styre varsler under Innstillinger → Brukere.
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`;
+  const plain = plainBody;
+  const html = htmlBody;
   const parts = [
     `--${boundary}`,
     'Content-Type: text/plain; charset=utf-8',
@@ -149,7 +137,7 @@ serve(async (req) => {
 
   const { data: ticket, error: ticketErr } = await serviceSupabase
     .from('tickets')
-    .select('id, tenant_id, ticket_number, subject, customer_id')
+    .select('id, tenant_id, ticket_number, subject, customer_id, team_id')
     .eq('id', ticketId.trim())
     .single();
 
@@ -212,7 +200,43 @@ serve(async (req) => {
     .not('user_id', 'is', null);
 
   const list = (subscribers ?? []) as { id: string; email: string; name?: string | null }[];
-  const toSend = list.filter((r) => r.email?.trim());
+  const recipients = new Map<string, { id: string; email: string; name?: string | null }>();
+  for (const row of list) {
+    const email = row.email?.trim();
+    if (!email) continue;
+    recipients.set(email.toLowerCase(), { ...row, email });
+  }
+
+  const teamId = (ticket as { team_id?: string | null }).team_id;
+  if (teamId) {
+    const { data: team } = await serviceSupabase
+      .from('teams')
+      .select('id, email_on_new_ticket_to_members')
+      .eq('id', teamId)
+      .eq('tenant_id', tenantId)
+      .maybeSingle();
+
+    if ((team as { email_on_new_ticket_to_members?: boolean } | null)?.email_on_new_ticket_to_members) {
+      const { data: teamRows } = await serviceSupabase
+        .from('team_member_teams')
+        .select('team_member:team_members!inner(id, email, name, is_active)')
+        .eq('team_id', teamId)
+        .eq('team_members.tenant_id', tenantId)
+        .eq('team_members.is_active', true);
+
+      const members = (teamRows ?? []) as Array<{
+        team_member?: { id: string; email?: string | null; name?: string | null; is_active?: boolean };
+      }>;
+      for (const row of members) {
+        const member = row.team_member;
+        const email = member?.email?.trim();
+        if (!email) continue;
+        recipients.set(email.toLowerCase(), { id: member.id, email, name: member.name ?? null });
+      }
+    }
+  }
+
+  const toSend = Array.from(recipients.values());
   if (toSend.length === 0) {
     return new Response(JSON.stringify({ success: true, sent: 0 }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -259,12 +283,74 @@ serve(async (req) => {
 
   const ticketNumber = (ticket as { ticket_number?: string | null })?.ticket_number?.trim() || '';
   const subject = (ticket as { subject?: string | null })?.subject?.trim() || '(Ingen emne)';
-  const subjectLine = ticketNumber ? `Ny sak: ${ticketNumber} – ${subject}` : `Ny sak: ${subject}`;
-  const subjectNormalized = subjectLine.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim();
+  const teamName = teamId
+    ? ((await serviceSupabase.from('teams').select('name').eq('id', teamId).eq('tenant_id', tenantId).maybeSingle()).data as { name?: string } | null)?.name ?? ''
+    : '';
 
   const appUrlEnv = (appUrl?.trim() || Deno.env.get('APP_URL') || '').trim();
   const baseUrl = (appUrlEnv && appUrlEnv !== 'APP_URL' && appUrlEnv.startsWith('http') ? appUrlEnv : 'https://the-prep-support.vercel.app').replace(/\/$/, '');
   const ticketLink = `${baseUrl}/tickets?view=all&select=${(ticket as { id: string }).id}`;
+  const { data: companySettings } = await serviceSupabase
+    .from('company_settings')
+    .select('key, value')
+    .eq('tenant_id', tenantId)
+    .in('key', ['company_logo_url', 'company_info']);
+  const companyMap = (companySettings ?? []).reduce(
+    (acc: Record<string, unknown>, r: { key: string; value: unknown }) => {
+      acc[r.key] = r.value;
+      return acc;
+    },
+    {}
+  );
+  const companyLogoUrl = typeof companyMap.company_logo_url === 'string' ? companyMap.company_logo_url.trim() : '';
+  const companyName =
+    companyMap.company_info && typeof companyMap.company_info === 'object' && typeof (companyMap.company_info as Record<string, unknown>).name === 'string'
+      ? String((companyMap.company_info as Record<string, unknown>).name).trim()
+      : 'Support';
+
+  const { data: tmplRow } = await serviceSupabase
+    .from('templates')
+    .select('subject, content')
+    .eq('tenant_id', tenantId)
+    .eq('category', 'new_ticket_notification')
+    .eq('is_active', true)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const tmpl = (tmplRow as { subject?: string | null; content?: string | null } | null) ?? null;
+  const vars = {
+    ticket_number: ticketNumber || '—',
+    'ticket.subject': subject,
+    ticket_link: ticketLink,
+    'team.name': teamName || '—',
+    'company.name': companyName || 'Support',
+    'company.logo_url': companyLogoUrl,
+  };
+  const defaultSubject = ticketNumber ? `Ny sak: ${ticketNumber} – ${subject}` : `Ny sak: ${subject}`;
+  const subjectLine = applyTemplateVars((tmpl?.subject?.trim() || defaultSubject), vars);
+  const subjectNormalized = subjectLine.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim();
+  const defaultHtml = `<!DOCTYPE html>
+<html lang="no">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen-Sans,Ubuntu,sans-serif;color:#1f2937;">
+  <div style="margin-bottom:12px;">${companyLogoUrl ? `<img src="{{company.logo_url}}" alt="${escapeHtml(companyName || 'Support')}" style="max-height:42px;width:auto;">` : `<strong>{{company.name}}</strong>`}</div>
+  <h2>En ny sak er opprettet i support-helpdesken.</h2>
+  <p><strong>Saksnummer:</strong> ${escapeHtml(vars.ticket_number)}</p>
+  <p><strong>Emne:</strong> ${escapeHtml(vars['ticket.subject'])}</p>
+  <p><strong>Team:</strong> ${escapeHtml(vars['team.name'])}</p>
+  <p><a href="${escapeHtml(ticketLink)}" style="display:inline-block;padding:10px 16px;border-radius:8px;background:#2563eb;color:#ffffff!important;text-decoration:none;font-weight:600;">Åpne saken</a></p>
+</body>
+</html>`;
+  const htmlBody = applyTemplateVars((tmpl?.content?.trim() || defaultHtml), vars);
+  const plainBody = stripHtmlToPlain(htmlBody) || [
+    'En ny sak er opprettet i support-helpdesken.',
+    '',
+    `Saksnummer: ${vars.ticket_number}`,
+    `Emne: ${vars['ticket.subject']}`,
+    `Team: ${vars['team.name']}`,
+    '',
+    `Åpne saken her: ${ticketLink}`,
+  ].join('\n');
   const fromHeader = `From: ${fromDisplay} <${fromAddress}>`;
   let sent = 0;
   for (const rec of toSend) {
@@ -273,9 +359,8 @@ serve(async (req) => {
       fromHeader,
       to,
       subjectEncoded: encodeSubjectUtf8(subjectNormalized),
-      ticketNumber,
-      subject,
-      ticketLink,
+      plainBody,
+      htmlBody,
     });
     const encoded = encodeBase64Url(raw);
     const sendRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {

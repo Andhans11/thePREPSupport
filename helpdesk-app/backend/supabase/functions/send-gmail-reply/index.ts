@@ -156,28 +156,6 @@ serve(async (req) => {
     });
   }
 
-  if (!ticket.gmail_thread_id) {
-    const { error: insertErr } = await serviceSupabase.from('messages').insert({
-      ticket_id: ticketId,
-      tenant_id: ticket.tenant_id,
-      from_email: user.email!,
-      from_name: user.user_metadata?.full_name ?? null,
-      content: message,
-      html_content: body.html && body.html.trim() ? body.html.trim() : null,
-      is_customer: false,
-    });
-    if (insertErr) {
-      console.error('send-gmail-reply: message insert failed', insertErr.message);
-      return new Response(JSON.stringify({ error: 'Failed to save message' }), {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
-    }
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  }
-
   const { data: gmailRow } = await serviceSupabase
     .from('gmail_sync')
     .select('refresh_token, email_address, group_email')
@@ -214,6 +192,28 @@ serve(async (req) => {
     : ((row.email_address?.trim() || user.email || '').trim() || user.email!);
   const fromDisplay = groupEmailTrimmed ? 'thePREP support' : (user.user_metadata?.full_name || fromAddress);
   const fromHeader = `From: ${fromDisplay} <${fromAddress}>`;
+
+  if (!ticket.gmail_thread_id) {
+    const { error: insertErr } = await serviceSupabase.from('messages').insert({
+      ticket_id: ticketId,
+      tenant_id: ticket.tenant_id,
+      from_email: fromAddress,
+      from_name: user.user_metadata?.full_name ?? null,
+      content: message,
+      html_content: body.html && body.html.trim() ? body.html.trim() : null,
+      is_customer: false,
+    });
+    if (insertErr) {
+      console.error('send-gmail-reply: message insert failed', insertErr.message);
+      return new Response(JSON.stringify({ error: 'Failed to save message' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ success: true, from_email: fromAddress }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
 
   const ticketNumber = (ticket as { ticket_number?: string | null })?.ticket_number?.trim() || '';
   const ticketSubject = (ticket as { subject?: string | null })?.subject?.trim() || '';

@@ -16,6 +16,8 @@ interface GmailSyncRow {
   updated_at: string;
 }
 
+export const GMAIL_SYNC_COMPLETED_EVENT = 'gmail-sync-completed';
+
 const LAST_SYNC_CREATED_KEY = 'hiver_last_sync_created';
 const LAST_SYNC_CREATED_TOLERANCE_MS = 2 * 60 * 1000; // 2 min – treat as same sync
 
@@ -209,6 +211,9 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
       }
     }
     setSyncing(false);
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(GMAIL_SYNC_COMPLETED_EVENT, { detail: { created } }));
+    }
     return { success: true, created };
   };
 

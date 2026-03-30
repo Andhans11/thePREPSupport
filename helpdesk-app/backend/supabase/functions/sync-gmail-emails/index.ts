@@ -95,13 +95,33 @@ function flattenParts(
 
 function compileTicketReceivedTemplate(
   content: string,
-  ctx: { ticket_number: string; customer_name: string; customer_email: string; ticket_subject: string }
+  ctx: {
+    ticket_number: string;
+    customer_name: string;
+    customer_email: string;
+    ticket_subject: string;
+    company_name: string;
+    company_logo_url: string;
+  }
 ): string {
   return content
     .replace(/\{\{ticket_number\}\}/g, ctx.ticket_number)
     .replace(/\{\{customer\.name\}\}/g, ctx.customer_name)
     .replace(/\{\{customer\.email\}\}/g, ctx.customer_email)
-    .replace(/\{\{ticket\.subject\}\}/g, ctx.ticket_subject);
+    .replace(/\{\{ticket\.subject\}\}/g, ctx.ticket_subject)
+    .replace(/\{\{company\.name\}\}/g, ctx.company_name)
+    .replace(/\{\{company\.logo_url\}\}/g, ctx.company_logo_url);
+}
+
+function readSettingString(value: unknown): string {
+  if (typeof value === 'string') return value.trim();
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.content === 'string') return obj.content.trim();
+    if (typeof obj.value === 'string') return obj.value.trim();
+    if (typeof obj.text === 'string') return obj.text.trim();
+  }
+  return '';
 }
 
 async function sendTicketReceivedReply(
@@ -110,19 +130,48 @@ async function sendTicketReceivedReply(
   toEmail: string,
   subjectLine: string,
   bodyPlain: string,
+  bodyHtml: string | null,
   fromAddress: string,
   fromDisplay: string
 ): Promise<boolean> {
   const fromHeader = `From: ${fromDisplay} <${fromAddress}>`;
   const plainNormalized = bodyPlain.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n');
-  const raw = [
-    fromHeader,
-    `To: ${toEmail}`,
-    `Subject: ${subjectLine.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim()}`,
-    'Content-Type: text/plain; charset=utf-8',
-    '',
-    plainNormalized,
-  ].join('\r\n');
+  const hasHtml = !!bodyHtml?.trim();
+  const htmlNormalized = hasHtml ? bodyHtml!.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n') : '';
+  const raw = hasHtml
+    ? (() => {
+        const boundary = 'np_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+        const parts = [
+          `--${boundary}`,
+          'Content-Type: text/plain; charset=utf-8',
+          'Content-Transfer-Encoding: 8bit',
+          '',
+          plainNormalized,
+          `--${boundary}`,
+          'Content-Type: text/html; charset=utf-8',
+          'Content-Transfer-Encoding: 8bit',
+          '',
+          htmlNormalized,
+          `--${boundary}--`,
+        ].join('\r\n');
+        return [
+          fromHeader,
+          `To: ${toEmail}`,
+          `Subject: ${subjectLine.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim()}`,
+          'MIME-Version: 1.0',
+          `Content-Type: multipart/alternative; boundary="${boundary}"`,
+          '',
+          parts,
+        ].join('\r\n');
+      })()
+    : [
+        fromHeader,
+        `To: ${toEmail}`,
+        `Subject: ${subjectLine.replace(/\r\n/g, ' ').replace(/\n/g, ' ').trim()}`,
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        plainNormalized,
+      ].join('\r\n');
   const encoded = encodeBase64Url(raw);
   const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
     method: 'POST',
@@ -222,7 +271,20 @@ async function runSyncForGmailRow(
     .from('company_settings')
     .select('key, value')
     .eq('tenant_id', tenantIdForData)
-    .in('key', ['ticket_received_subject', 'ticket_received_content', 'email_sender_on_new_ticket']);
+    .in('key', ['ticket_received_subject', 'ticket_received_content', 'ticket_received_content_html', 'email_sender_on_new_ticket']);
+  const { data: companySettings } = await serviceSupabase
+    .from('company_settings')
+    .select('key, value')
+    .eq('tenant_id', tenantIdForData)
+    .in('key', ['company_logo_url', 'company_info']);
+  const { data: templateRows } = await serviceSupabase
+    .from('templates')
+    .select('subject, content')
+    .eq('tenant_id', tenantIdForData)
+    .eq('category', 'ticket_received')
+    .eq('is_active', true)
+    .order('updated_at', { ascending: false })
+    .limit(1);
   const settingsMap = (emailSettings ?? []).reduce(
     (acc: Record<string, unknown>, r: { key: string; value: unknown }) => {
       acc[r.key] = r.value;
@@ -232,16 +294,34 @@ async function runSyncForGmailRow(
   );
   const emailSenderOnNewTicket = settingsMap['email_sender_on_new_ticket'] === true || settingsMap['email_sender_on_new_ticket'] === 'true';
   // Mottaksbekreftelse: subject and content from Settings → Maler (Mottaksbekreftelse)
-  const ticketReceivedSubjectRaw = settingsMap['ticket_received_subject'];
-  const ticketReceivedContentRaw = settingsMap['ticket_received_content'];
-  const ticketReceivedSubject =
-    typeof ticketReceivedSubjectRaw === 'string' ? ticketReceivedSubjectRaw.trim() : '';
-  const ticketReceivedContent =
-    typeof ticketReceivedContentRaw === 'string' ? String(ticketReceivedContentRaw).trim() : '';
+  const latestTemplate = ((templateRows ?? [])[0] ?? null) as
+    | { subject?: string | null; content?: string | null }
+    | null;
+  const ticketReceivedSubjectRaw = latestTemplate?.subject ?? settingsMap['ticket_received_subject'];
+  const ticketReceivedContentRaw = latestTemplate?.content ?? settingsMap['ticket_received_content'];
+  const ticketReceivedHtmlRaw = settingsMap['ticket_received_content_html'];
+  const ticketReceivedSubject = readSettingString(ticketReceivedSubjectRaw);
+  const ticketReceivedContent = readSettingString(ticketReceivedContentRaw);
+  const ticketReceivedHtml = readSettingString(ticketReceivedHtmlRaw);
   const defaultTicketReceivedBody =
-    'We have received your request. Your ticket number is {{ticket_number}}. We will get back to you as soon as possible.';
+    'Hei {{customer.name}},\n\nVi har mottatt henvendelsen din. Saksnummeret ditt er {{ticket_number}}.\n\nVi kommer tilbake til deg sa raskt vi kan.\n\nMed vennlig hilsen,\nSupport';
   const ticketReceivedBody =
     ticketReceivedContent.length > 0 ? ticketReceivedContent : defaultTicketReceivedBody;
+  const companyMap = (companySettings ?? []).reduce(
+    (acc: Record<string, unknown>, r: { key: string; value: unknown }) => {
+      acc[r.key] = r.value;
+      return acc;
+    },
+    {}
+  );
+  const companyLogoUrl = readSettingString(companyMap['company_logo_url']);
+  const companyInfoRaw = companyMap['company_info'];
+  const companyName =
+    companyInfoRaw && typeof companyInfoRaw === 'object' && typeof (companyInfoRaw as Record<string, unknown>).name === 'string'
+      ? String((companyInfoRaw as Record<string, unknown>).name).trim()
+      : 'Support';
+  const defaultTicketReceivedHtml =
+    `<!DOCTYPE html><html lang="no"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head><body style="margin:0;padding:24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;background:#f6f7fb;color:#111827;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:620px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;"><tr><td style="padding:20px 24px;border-bottom:1px solid #e5e7eb;background:#fafafa;">${companyLogoUrl ? `<img src="{{company.logo_url}}" alt="${companyName}" style="max-height:42px;width:auto;display:block;">` : `<strong style="font-size:18px;">{{company.name}}</strong>`}</td></tr><tr><td style="padding:24px;"><p>Hei {{customer.name}},</p><p>Vi har mottatt henvendelsen din. Saksnummeret ditt er <strong>{{ticket_number}}</strong>.</p><p>Vi kommer tilbake til deg sa snart vi kan.</p><p>Med vennlig hilsen,<br>{{company.name}}</p></td></tr></table></body></html>`;
 
   const groupEmail = gmailRow.group_email ?? null;
   const groupEmailTrimmed = groupEmail != null && String(groupEmail).trim() !== '' ? String(groupEmail).trim() : null;
@@ -490,7 +570,26 @@ async function runSyncForGmailRow(
           customer_name: fromName?.trim() || fromEmail,
           customer_email: fromEmail,
           ticket_subject: subject || '(No subject)',
+          company_name: companyName || 'Support',
+          company_logo_url: companyLogoUrl,
         });
+        const replyBodyHtml = ticketReceivedHtml
+          ? compileTicketReceivedTemplate(ticketReceivedHtml, {
+              ticket_number: ticketNumber,
+              customer_name: fromName?.trim() || fromEmail,
+              customer_email: fromEmail,
+              ticket_subject: subject || '(No subject)',
+              company_name: companyName || 'Support',
+              company_logo_url: companyLogoUrl,
+            })
+          : compileTicketReceivedTemplate(defaultTicketReceivedHtml, {
+              ticket_number: ticketNumber,
+              customer_name: fromName?.trim() || fromEmail,
+              customer_email: fromEmail,
+              ticket_subject: subject || '(No subject)',
+              company_name: companyName || 'Support',
+              company_logo_url: companyLogoUrl,
+            });
         const subjectBase = (ticketReceivedSubject || subject || 'Your request').trim();
         const replySubject = ticketNumber ? `[${ticketNumber}] ${subjectBase}` : subjectBase;
         await sendTicketReceivedReply(
@@ -499,6 +598,7 @@ async function runSyncForGmailRow(
           fromEmail,
           replySubject,
           replyBody,
+          replyBodyHtml,
           fromAddress,
           fromDisplay
         );

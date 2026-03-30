@@ -287,7 +287,7 @@ export function CalendarPage() {
   };
 
   return (
-    <div className="p-6 lg:p-8 max-w-5xl mx-auto space-y-6">
+    <div className="p-6 lg:p-8 w-full space-y-6">
       <div className="flex items-center gap-2">
         <Calendar className="w-6 h-6 text-[var(--hiver-accent)]" />
         <h1 className="text-2xl font-semibold text-[var(--hiver-text)]">Kalender</h1>

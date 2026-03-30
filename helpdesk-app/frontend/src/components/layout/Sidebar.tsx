@@ -228,8 +228,8 @@ export function Sidebar() {
           );
         })}
       </nav>
-      {showSettings && (
-        <div className="p-3 border-t border-[var(--hiver-border)]">
+      <div className="p-3 border-t border-[var(--hiver-border)]">
+        {showSettings && (
           <Link
             to="/settings"
             className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
@@ -241,9 +241,11 @@ export function Sidebar() {
             <Settings className="w-5 h-5 shrink-0" />
             Innstillinger
           </Link>
-          <p className="mt-2 px-3 text-xs text-[var(--hiver-text-muted)]">Versjon v{appVersion}</p>
-        </div>
-      )}
+        )}
+        <p className={`text-xs text-[var(--hiver-text-muted)] ${showSettings ? 'mt-2' : ''} px-3`}>
+          Versjon v{appVersion}
+        </p>
+      </div>
 
       {/* Create new organisation modal */}
       {createOrgModalOpen && (

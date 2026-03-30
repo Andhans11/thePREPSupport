@@ -8,7 +8,7 @@ import { useDashboard } from '../contexts/DashboardContext';
 import { useModules } from '../contexts/ModulesContext';
 import { useGoogleCalendar } from '../contexts/GoogleCalendarContext';
 import { useToast } from '../contexts/ToastContext';
-import { canSeeTeamStatusDashboard, isAdmin, isManager, canReplyToTickets, canApproveRejectOwnSlots, canManagePlanningSlots } from '../types/roles';
+import { canSeeTeamStatusDashboard, isAdmin, isAgent, isManager, canReplyToTickets, canApproveRejectOwnSlots, canManagePlanningSlots } from '../types/roles';
 import { canAccessModule } from '../types/modules';
 import { formatListTime } from '../utils/formatters';
 import { addDays, endOfDay, format, isSameDay, startOfDay } from 'date-fns';
@@ -213,6 +213,11 @@ export function DashboardPage() {
   const showCalendarModule = canAccessModule('calendar', calendarEnabled, moduleRoleAccess.calendar, role);
   const showAdminLinks = isAdmin(role);
   const { connection: calendarConnection } = useGoogleCalendar();
+  /** Agents see the dashboard calendar card when Google Calendar is connected, even if Kalender module is off for the agent role. */
+  const showCalendarDashboardCard =
+    calendarEnabled &&
+    calendarConnection.connected &&
+    (showCalendarModule || isAgent(role));
   const toast = useToast();
   const [recentTab, setRecentTab] = useState<'mine' | 'unassigned'>('mine');
   const [upcomingCalendarEvents, setUpcomingCalendarEvents] = useState<DashboardCalendarEvent[]>([]);
@@ -691,7 +696,7 @@ export function DashboardPage() {
       )}
 
       {/* Calendar: upcoming Google events */}
-      {showCalendarModule && calendarConnection.connected && (
+      {showCalendarDashboardCard && (
         <div className="mb-6 lg:mb-8 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
           <div className="p-5 lg:p-6">
             <div className="flex items-center justify-between gap-3 mb-2">

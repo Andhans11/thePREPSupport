@@ -19,7 +19,7 @@ const VIEWS: { view: AssignmentView; label: string }[] = [
   { view: 'archived', label: 'Arkivert' },
 ];
 
-const AGENT_ALLOWED_VIEWS = new Set<AssignmentView>(['mine', 'team']);
+const AGENT_ALLOWED_VIEWS = new Set<AssignmentView>(['mine', 'team', 'closed', 'archived']);
 
 const VIEW_LABELS: Record<AssignmentView, string> = {
   all: 'Alle åpne saker',

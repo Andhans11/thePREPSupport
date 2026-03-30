@@ -7,6 +7,7 @@ import { GMAIL_SYNC_COMPLETED_EVENT } from './GmailContext';
 import { useAuth } from './AuthContext';
 import { useTenant } from './TenantContext';
 import { useCurrentUserRole } from '../hooks/useCurrentUserRole';
+import { fetchDashboardScopedTeamIds, ticketsOrFilterForDashboardRole } from '../utils/dashboardTicketScope';
 
 export type AssignmentView = 'all' | 'mine' | 'unassigned' | 'team' | 'archived' | 'closed';
 
@@ -128,13 +129,37 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
 
       if (memberRole === 'agent') {
         const [teamRes, mineRes] = await Promise.all([teamQ, mineQ]);
+        let archivedCount = 0;
+        let closedCount = 0;
+        if (userId) {
+          const teamIds = await fetchDashboardScopedTeamIds(supabase, currentTenantId, userId);
+          const orFilter = ticketsOrFilterForDashboardRole(memberRole, userId, teamIds);
+          if (orFilter) {
+            const [closedRes, archivedRes] = await Promise.all([
+              supabase
+                .from('tickets')
+                .select('id', { count: 'exact', head: true })
+                .eq('tenant_id', currentTenantId)
+                .eq('status', 'closed')
+                .or(orFilter),
+              supabase
+                .from('tickets')
+                .select('id', { count: 'exact', head: true })
+                .eq('tenant_id', currentTenantId)
+                .eq('status', 'archived')
+                .or(orFilter),
+            ]);
+            closedCount = closedRes.count ?? 0;
+            archivedCount = archivedRes.count ?? 0;
+          }
+        }
         setViewCounts({
           all: 0,
           unassigned: 0,
           team: teamRes.count ?? 0,
           mine: mineRes.count ?? 0,
-          archived: 0,
-          closed: 0,
+          archived: archivedCount,
+          closed: closedCount,
         });
         return;
       }
@@ -187,7 +212,7 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       const last = lastFiltersRef.current;
       let view = filters?.assignmentView ?? assignmentView;
       if (memberRole === 'agent') {
-        if (view === 'all' || view === 'unassigned' || view === 'closed' || view === 'archived') {
+        if (view === 'all' || view === 'unassigned') {
           view = 'mine';
         }
       }
@@ -242,8 +267,18 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
         if (!status) query = query.neq('status', 'archived').neq('status', 'closed');
       } else if (view === 'archived') {
         query = query.eq('status', 'archived');
+        if (memberRole === 'agent' && uid) {
+          const teamIds = await fetchDashboardScopedTeamIds(supabase, currentTenantId, uid);
+          const orFilter = ticketsOrFilterForDashboardRole(memberRole, uid, teamIds);
+          if (orFilter) query = query.or(orFilter);
+        }
       } else if (view === 'closed') {
         query = query.eq('status', 'closed');
+        if (memberRole === 'agent' && uid) {
+          const teamIds = await fetchDashboardScopedTeamIds(supabase, currentTenantId, uid);
+          const orFilter = ticketsOrFilterForDashboardRole(memberRole, uid, teamIds);
+          if (orFilter) query = query.or(orFilter);
+        }
       } else if (view === 'all') {
         query = query.neq('status', 'archived').neq('status', 'closed');
       }
@@ -267,9 +302,21 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
             countQuery = countQuery.in('team_id', teamIds);
             if (!status) countQuery = countQuery.neq('status', 'archived').neq('status', 'closed');
           }
-        } else if (view === 'archived') countQuery = countQuery.eq('status', 'archived');
-        else if (view === 'closed') countQuery = countQuery.eq('status', 'closed');
-        else if (view === 'all') countQuery = countQuery.neq('status', 'archived').neq('status', 'closed');
+        } else if (view === 'archived') {
+          countQuery = countQuery.eq('status', 'archived');
+          if (memberRole === 'agent' && uid) {
+            const teamIds = await fetchDashboardScopedTeamIds(supabase, currentTenantId, uid);
+            const orFilter = ticketsOrFilterForDashboardRole(memberRole, uid, teamIds);
+            if (orFilter) countQuery = countQuery.or(orFilter);
+          }
+        } else if (view === 'closed') {
+          countQuery = countQuery.eq('status', 'closed');
+          if (memberRole === 'agent' && uid) {
+            const teamIds = await fetchDashboardScopedTeamIds(supabase, currentTenantId, uid);
+            const orFilter = ticketsOrFilterForDashboardRole(memberRole, uid, teamIds);
+            if (orFilter) countQuery = countQuery.or(orFilter);
+          }
+        } else if (view === 'all') countQuery = countQuery.neq('status', 'archived').neq('status', 'closed');
         if (status) countQuery = countQuery.eq('status', status);
         const { count } = await countQuery;
         setTotalCount(count ?? 0);

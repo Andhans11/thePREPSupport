@@ -21,7 +21,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   admin: 'Full tilgang: innstillinger, brukere, maler og alle saker.',
   manager: 'Leder: se alle saker, team på dashbord, og teammedlemmer i egne team under Innstillinger.',
-  agent: 'Ser kun egne saker og saker i egne team. Kan svare kunder og bruke maler. Teamliste er skrivebeskyttet.',
+  agent: 'Ser egne og teamets saker (inkl. lukket/arkivert innenfor dette). Kan svare kunder og bruke maler. Ingen tilgang til Innstillinger.',
   viewer: 'Kun lesing: se saker og kunder.',
 };
 
@@ -50,14 +50,14 @@ export function canAccessAnalytics(role: Role | null | undefined): boolean {
   return role === 'admin' || role === 'manager';
 }
 
-/** Settings: admin (all), viewer (company/innbokser), manager (company/innbokser + teamkatalog), agent (teamkatalog only). */
+/** Settings: admin (all), viewer (company/innbokser), manager (company/innbokser + teamkatalog). Agents use the app without Innstillinger. */
 export function canAccessSettings(role: Role | null | undefined): boolean {
-  return role === 'admin' || role === 'viewer' || role === 'manager' || role === 'agent';
+  return role === 'admin' || role === 'viewer' || role === 'manager';
 }
 
-/** Managers and agents see Brukere as a read-only, team-scoped directory (not full user admin). */
+/** Managers see Brukere as a read-only, team-scoped directory under Innstillinger (not full user admin). */
 export function canViewTeamDirectory(role: Role | null | undefined): boolean {
-  return role === 'manager' || role === 'agent';
+  return role === 'manager';
 }
 
 export function canManageUsers(role: Role | null | undefined): boolean {

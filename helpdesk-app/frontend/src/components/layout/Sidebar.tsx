@@ -15,7 +15,7 @@ import {
   X,
 } from 'lucide-react';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
-import { canAccessSettings, canAccessTimeRegistration } from '../../types/roles';
+import { canAccessSettings, canAccessTimeRegistration, isAgent } from '../../types/roles';
 import { canAccessModule } from '../../types/modules';
 import { useTenant } from '../../contexts/TenantContext';
 import { useModules } from '../../contexts/ModulesContext';
@@ -53,7 +53,9 @@ export function Sidebar() {
       to: '/kalender',
       label: 'Kalender',
       icon: Calendar,
-      show: () => canAccessModule('calendar', calendarEnabled, roleAccess.calendar, role),
+      show: () =>
+        canAccessModule('calendar', calendarEnabled, roleAccess.calendar, role) ||
+        (calendarEnabled && isAgent(role)),
     },
     { to: '/customers', label: 'Kunder', icon: Users, show: () => true },
     {

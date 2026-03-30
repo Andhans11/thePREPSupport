@@ -213,11 +213,15 @@ export function DashboardPage() {
   const showCalendarModule = canAccessModule('calendar', calendarEnabled, moduleRoleAccess.calendar, role);
   const showAdminLinks = isAdmin(role);
   const { connection: calendarConnection } = useGoogleCalendar();
-  /** Agents see the dashboard calendar card when Google Calendar is connected, even if Kalender module is off for the agent role. */
+  /**
+   * Show card when tenant calendar is on and the user may see it.
+   * Non-agents: require GoogleCalendarContext.connected (they can read their own google_calendar_sync row).
+   * Agents: cannot read another user's sync row (RLS), but can read google_calendar_events for the tenant — so do not require connected.
+   */
   const showCalendarDashboardCard =
     calendarEnabled &&
-    calendarConnection.connected &&
-    (showCalendarModule || isAgent(role));
+    (showCalendarModule || isAgent(role)) &&
+    (isAgent(role) || calendarConnection.connected);
   const toast = useToast();
   const [recentTab, setRecentTab] = useState<'mine' | 'unassigned'>('mine');
   const [upcomingCalendarEvents, setUpcomingCalendarEvents] = useState<DashboardCalendarEvent[]>([]);
@@ -247,7 +251,11 @@ export function DashboardPage() {
 
   useEffect(() => {
     async function fetchUpcomingCalendarEvents() {
-      if (!currentTenantId || !calendarConnection.connected) {
+      if (!currentTenantId) {
+        setUpcomingCalendarEvents([]);
+        return;
+      }
+      if (!isAgent(role) && !calendarConnection.connected) {
         setUpcomingCalendarEvents([]);
         return;
       }
@@ -266,7 +274,7 @@ export function DashboardPage() {
       setCalendarLoading(false);
     }
     fetchUpcomingCalendarEvents();
-  }, [currentTenantId, calendarConnection.connected]);
+  }, [currentTenantId, calendarConnection.connected, role]);
 
   const calendarBookingsToday = useMemo(() => {
     const now = new Date();

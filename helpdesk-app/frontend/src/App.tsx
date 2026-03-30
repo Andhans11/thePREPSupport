@@ -31,6 +31,7 @@ import { NotificationsPage } from './pages/NotificationsPage';
 import { useCurrentUserRole } from './hooks/useCurrentUserRole';
 import { useModules } from './contexts/ModulesContext';
 import { canAccessModule } from './types/modules';
+import { isAgent } from './types/roles';
 
 function HomeOrLanding() {
   const { user, loading } = useAuth();
@@ -81,7 +82,9 @@ function CalendarGuard() {
   const { role, loading: roleLoading } = useCurrentUserRole();
   const { loading, calendarEnabled, roleAccess } = useModules();
   if (loading || roleLoading) return null;
-  if (!canAccessModule('calendar', calendarEnabled, roleAccess.calendar, role)) {
+  const moduleOk = canAccessModule('calendar', calendarEnabled, roleAccess.calendar, role);
+  const agentTenantCalendar = calendarEnabled && isAgent(role);
+  if (!moduleOk && !agentTenantCalendar) {
     return <Navigate to="/" replace />;
   }
   return <CalendarPage />;

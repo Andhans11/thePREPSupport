@@ -42,7 +42,8 @@ serve(async (req) => {
     { global: { headers: { Authorization: `Bearer ${token}` } } }
   );
 
-  const { data: { user }, error: userError } = await userClient.auth.getUser(token);
+  const { data: userData, error: userError } = await userClient.auth.getUser();
+  const user = userData?.user;
   if (!user) {
     const message = userError?.message?.toLowerCase().includes('jwt')
       ? 'Session expired or invalid. Please log in again.'
@@ -71,10 +72,16 @@ serve(async (req) => {
     });
   }
 
-  const tenantIds = new Set<string>();
+  const ticketKeys = new Set<string>();
   for (const p of paths) {
-    const first = p.split('/')[0];
-    if (first) tenantIds.add(first);
+    const parts = p.split('/');
+    if (parts.length < 2) {
+      return new Response(JSON.stringify({ error: 'Invalid attachment path' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    ticketKeys.add(`${parts[0]}/${parts[1]}`);
   }
 
   const serviceSupabase = createClient(
@@ -82,15 +89,21 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
   );
 
-  for (const tid of tenantIds) {
-    const { data: member } = await serviceSupabase
-      .from('team_members')
+  for (const key of ticketKeys) {
+    const [tenantId, ticketId] = key.split('/');
+    if (!tenantId || !ticketId) {
+      return new Response(JSON.stringify({ error: 'Invalid attachment path' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    const { data: ticket } = await userClient
+      .from('tickets')
       .select('id')
-      .eq('tenant_id', tid)
-      .eq('user_id', user.id)
-      .eq('is_active', true)
+      .eq('tenant_id', tenantId)
+      .eq('id', ticketId)
       .maybeSingle();
-    if (!member) {
+    if (!ticket) {
       return new Response(JSON.stringify({ error: 'Access denied to one or more attachments' }), {
         status: 403,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

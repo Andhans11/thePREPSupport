@@ -27,3 +27,7 @@ verify_jwt = false
 
 [functions.sync-google-calendar-events]
 verify_jwt = false
+
+# Validate Bearer JWT inside the handler; gateway verify can 401 valid sessions for some clients.
+[functions.sign-ticket-attachment-urls]
+verify_jwt = false

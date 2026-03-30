@@ -1,4 +1,5 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, lazy, Suspense } from 'react';
+import { Link } from 'react-router-dom';
 import { useTickets } from '../../contexts/TicketContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenant } from '../../contexts/TenantContext';
@@ -19,16 +20,12 @@ import {
   Reply,
   ReplyAll,
   Forward,
-  ChevronLeft,
-  ChevronRight,
-  Mail,
-  Printer,
-  MoreVertical,
   X,
   FileText,
-  Image,
   CheckCircle,
 } from 'lucide-react';
+
+const TicketCustomerCasesTab = lazy(() => import('./TicketCustomerCasesTab'));
 
 function formatMessageDate(iso: string) {
   const d = new Date(iso);
@@ -70,7 +67,7 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
   const gmail = useGmail();
   const supportEmail = gmail?.groupEmail?.trim() || gmail?.gmailEmail?.trim() || null;
   const [teams, setTeams] = useState<TeamOption[]>([]);
-  const [notesTab, setNotesTab] = useState<'activities' | 'notes'>('activities');
+  const [timelineTab, setTimelineTab] = useState<'activities' | 'notes' | 'cases'>('activities');
   const [isSmallScreen, setIsSmallScreen] = useState(
     () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches
   );
@@ -183,7 +180,7 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
       await fetchMessages(selectedTicket.id);
       setNewNoteContent('');
       setShowAddNoteForm(false);
-      setNotesTab('notes');
+      setTimelineTab('notes');
       toast.success('Notat er lagret');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Kunne ikke lagre notat');
@@ -211,27 +208,6 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
       <div className="flex flex-col flex-1 min-w-0 border-r border-[var(--hiver-border)] bg-white">
         {/* Top action bar */}
         <div className="shrink-0 flex items-center gap-1 px-3 py-2 border-b border-[var(--hiver-border)] bg-[var(--hiver-bg)]/80">
-          <button
-            type="button"
-            className="p-2 rounded-lg text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-text)]"
-            aria-label="Forrige"
-          >
-            <ChevronLeft className="w-5 h-5" />
-          </button>
-          <button
-            type="button"
-            className="p-2 rounded-lg text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-text)]"
-            aria-label="Neste"
-          >
-            <ChevronRight className="w-5 h-5" />
-          </button>
-          <button
-            type="button"
-            className="p-2 rounded-lg text-[var(--hiver-accent)] bg-[var(--hiver-bg)]"
-            aria-label="Innboks"
-          >
-            <Mail className="w-5 h-5" />
-          </button>
           <div className="flex-1" />
           <button
             type="button"
@@ -259,20 +235,6 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
           >
             <Forward className="w-5 h-5" />
             <span className="text-[10px]">Videresend</span>
-          </button>
-          <button
-            type="button"
-            className="p-2 rounded-lg text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-text)]"
-            aria-label="Skriv ut"
-          >
-            <Printer className="w-5 h-5" />
-          </button>
-          <button
-            type="button"
-            className="p-2 rounded-lg text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)] hover:text-[var(--hiver-text)]"
-            aria-label="Mer"
-          >
-            <MoreVertical className="w-5 h-5" />
           </button>
           <button
             type="button"
@@ -326,7 +288,16 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
               </div>
               <div className="min-w-0 flex-1">
                 <p className="font-semibold text-[var(--hiver-text)]">
-                  {firstMessage.from_name || firstMessage.from_email}
+                  {selectedTicket.customer_id ? (
+                    <Link
+                      to={`/customers/${selectedTicket.customer_id}`}
+                      className="hover:text-[var(--hiver-accent)] hover:underline rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--hiver-accent)] focus-visible:ring-offset-1"
+                    >
+                      {customer?.name?.trim() || firstMessage.from_name || firstMessage.from_email}
+                    </Link>
+                  ) : (
+                    customer?.name?.trim() || firstMessage.from_name || firstMessage.from_email
+                  )}
                 </p>
                 <p className="text-sm text-[var(--hiver-text-muted)]">
                   {firstMessage.from_email}
@@ -336,13 +307,6 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
                 <span className="text-sm text-[var(--hiver-text-muted)]">
                   {formatMessageDate(firstMessage.created_at)}
                 </span>
-                <button
-                  type="button"
-                  className="p-1.5 rounded text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)]"
-                  aria-label="Mer"
-                >
-                  <MoreVertical className="w-4 h-4" />
-                </button>
               </div>
             </div>
           </div>
@@ -445,13 +409,6 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
                 aria-label="Kontakt"
               >
                 <User className="w-4 h-4" />
-              </button>
-              <button
-                type="button"
-                className="p-2 rounded-lg text-[var(--hiver-text-muted)] hover:bg-[var(--hiver-bg)]"
-                aria-label="Bilder"
-              >
-                <Image className="w-4 h-4" />
               </button>
               <button
                 type="button"
@@ -694,9 +651,9 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
             <div className="flex border-b border-[var(--hiver-border)] shrink-0">
               <button
                 type="button"
-                onClick={() => setNotesTab('activities')}
-                className={`flex-1 px-3 py-2.5 text-sm font-medium ${
-                  notesTab === 'activities'
+                onClick={() => setTimelineTab('activities')}
+                className={`flex-1 px-2 py-2.5 text-xs font-medium sm:text-sm ${
+                  timelineTab === 'activities'
                     ? 'text-[var(--hiver-accent)] border-b-2 border-[var(--hiver-accent)] -mb-px'
                     : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
                 }`}
@@ -705,16 +662,28 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
               </button>
               <button
                 type="button"
-                onClick={() => setNotesTab('notes')}
-                className={`flex-1 px-3 py-2.5 text-sm font-medium ${
-                  notesTab === 'notes'
+                onClick={() => setTimelineTab('notes')}
+                className={`flex-1 px-2 py-2.5 text-xs font-medium sm:text-sm ${
+                  timelineTab === 'notes'
                     ? 'text-[var(--hiver-accent)] border-b-2 border-[var(--hiver-accent)] -mb-px'
                     : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
                 }`}
               >
                 Notater
               </button>
+              <button
+                type="button"
+                onClick={() => setTimelineTab('cases')}
+                className={`flex-1 px-2 py-2.5 text-xs font-medium sm:text-sm ${
+                  timelineTab === 'cases'
+                    ? 'text-[var(--hiver-accent)] border-b-2 border-[var(--hiver-accent)] -mb-px'
+                    : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+                }`}
+              >
+                Saker
+              </button>
             </div>
+            {timelineTab !== 'cases' && (
             <div className="p-2 border-b border-[var(--hiver-border)] shrink-0 space-y-2">
               {!showAddNoteForm ? (
                 <button
@@ -775,8 +744,9 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
                 </div>
               )}
             </div>
+            )}
             <div className="flex-1 overflow-y-auto p-3 min-h-[180px]">
-              {notesTab === 'activities' && (
+              {timelineTab === 'activities' && (
                 <div className="space-y-3 text-sm">
                   {messagesNewestFirst.length === 0 && (
                     <div className="flex gap-2">
@@ -808,7 +778,7 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
                   ))}
                 </div>
               )}
-              {notesTab === 'notes' && (
+              {timelineTab === 'notes' && (
                 <div className="space-y-3">
                   {internalNotes.length === 0 ? (
                     <p className="text-sm text-[var(--hiver-text-muted)]">
@@ -830,6 +800,21 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
                     </div>
                   )}
                 </div>
+              )}
+              {timelineTab === 'cases' && (
+                <Suspense
+                  fallback={
+                    <p className="text-sm text-[var(--hiver-text-muted)] py-2" role="status">
+                      Laster saker…
+                    </p>
+                  }
+                >
+                  <TicketCustomerCasesTab
+                    customerId={selectedTicket.customer_id}
+                    tenantId={currentTenantId}
+                    currentTicketId={selectedTicket.id}
+                  />
+                </Suspense>
               )}
             </div>
           </div>

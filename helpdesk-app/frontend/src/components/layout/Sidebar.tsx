@@ -44,6 +44,7 @@ export function Sidebar() {
 
   const currentTenant = tenants.find((t) => t.id === currentTenantId);
   const organisationName = currentTenant?.name ?? 'Organisasjon';
+  const appVersion = __APP_VERSION__;
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -210,6 +211,7 @@ export function Sidebar() {
             <Settings className="w-5 h-5 shrink-0" />
             Innstillinger
           </Link>
+          <p className="mt-2 px-3 text-xs text-[var(--hiver-text-muted)]">Versjon v{appVersion}</p>
         </div>
       )}
 

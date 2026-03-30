@@ -1,21 +1,38 @@
+import { useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Building2, Users, UsersRound, FileText, Clock, FileSignature, Database, Mail, Timer } from 'lucide-react';
-import { canManageUsers } from '../../types/roles';
+import { Building2, Users, UsersRound, FileText, Clock, FileSignature, Database, Mail, Timer, Blocks } from 'lucide-react';
+import { canManageUsers, canViewTeamDirectory } from '../../types/roles';
 import type { Role } from '../../types/roles';
 
-export type SettingsTabId = 'company' | 'inboxes' | 'users' | 'teams' | 'templates' | 'business_hours' | 'signatures' | 'master_data' | 'time_registration';
+export type SettingsTabId = 'company' | 'inboxes' | 'modules' | 'users' | 'teams' | 'templates' | 'business_hours' | 'signatures' | 'master_data' | 'time_registration';
 
-const TABS: { id: SettingsTabId; label: string; icon: typeof Building2; requiresAdmin?: boolean }[] = [
+const TABS: { id: SettingsTabId; label: string; icon: typeof Building2 }[] = [
   { id: 'company', label: 'Selskap', icon: Building2 },
   { id: 'inboxes', label: 'E-post innbokser', icon: Mail },
-  { id: 'users', label: 'Brukere', icon: Users, requiresAdmin: true },
-  { id: 'teams', label: 'Team', icon: UsersRound, requiresAdmin: true },
-  { id: 'templates', label: 'Maler', icon: FileText, requiresAdmin: true },
-  { id: 'business_hours', label: 'Åpningstider', icon: Clock, requiresAdmin: true },
-  { id: 'signatures', label: 'Signaturer', icon: FileSignature, requiresAdmin: true },
-  { id: 'master_data', label: 'Stamdata', icon: Database, requiresAdmin: true },
-  { id: 'time_registration', label: 'Timeregistrering', icon: Timer, requiresAdmin: true },
+  { id: 'modules', label: 'Moduler', icon: Blocks },
+  { id: 'users', label: 'Brukere', icon: Users },
+  { id: 'teams', label: 'Team', icon: UsersRound },
+  { id: 'templates', label: 'Maler', icon: FileText },
+  { id: 'business_hours', label: 'Åpningstider', icon: Clock },
+  { id: 'signatures', label: 'Signaturer', icon: FileSignature },
+  { id: 'master_data', label: 'Stamdata', icon: Database },
+  { id: 'time_registration', label: 'Timeregistrering', icon: Timer },
 ];
+
+export function isSettingsTabVisible(id: SettingsTabId, role: Role | null): boolean {
+  if (!role) return false;
+  const adminOnly: SettingsTabId[] = ['modules', 'teams', 'templates', 'business_hours', 'signatures', 'master_data', 'time_registration'];
+  if (adminOnly.includes(id)) {
+    return canManageUsers(role);
+  }
+  if (id === 'company' || id === 'inboxes') {
+    return role !== 'agent';
+  }
+  if (id === 'users') {
+    return canManageUsers(role) || canViewTeamDirectory(role);
+  }
+  return false;
+}
 
 interface SettingsTabsProps {
   currentRole: Role | null;
@@ -24,8 +41,15 @@ interface SettingsTabsProps {
 
 export function SettingsTabs({ currentRole, children }: SettingsTabsProps) {
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = (searchParams.get('tab') as SettingsTabId) || 'company';
-  const validTab = TABS.some((t) => t.id === tab) ? tab : 'company';
+  const tabParam = (searchParams.get('tab') as SettingsTabId) || 'company';
+
+  const validTab = useMemo((): SettingsTabId => {
+    if (TABS.some((t) => t.id === tabParam && isSettingsTabVisible(t.id, currentRole))) {
+      return tabParam;
+    }
+    const first = TABS.find((t) => isSettingsTabVisible(t.id, currentRole))?.id;
+    return first ?? 'company';
+  }, [tabParam, currentRole]);
 
   const setTab = (id: SettingsTabId) => {
     setSearchParams({ tab: id });
@@ -35,9 +59,8 @@ export function SettingsTabs({ currentRole, children }: SettingsTabsProps) {
     <div className="flex flex-col h-full w-full">
       <div className="w-full border-b border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)]">
         <nav className="flex gap-1 px-2" aria-label="Innstillinger-faner">
-          {TABS.map(({ id, label, icon: Icon, requiresAdmin }) => {
-            const hidden = requiresAdmin && !canManageUsers(currentRole);
-            if (hidden) return null;
+          {TABS.map(({ id, label, icon: Icon }) => {
+            if (!isSettingsTabVisible(id, currentRole)) return null;
             const isActive = validTab === id;
             return (
               <button
@@ -62,8 +85,11 @@ export function SettingsTabs({ currentRole, children }: SettingsTabsProps) {
   );
 }
 
-export function useSettingsTab(): SettingsTabId {
+export function useSettingsTab(currentRole: Role | null): SettingsTabId {
   const [searchParams] = useSearchParams();
-  const tab = (searchParams.get('tab') as SettingsTabId) || 'company';
-  return TABS.some((t) => t.id === tab) ? tab : 'company';
+  const tabParam = (searchParams.get('tab') as SettingsTabId) || 'company';
+  if (TABS.some((t) => t.id === tabParam && isSettingsTabVisible(t.id, currentRole))) {
+    return tabParam;
+  }
+  return TABS.find((t) => isSettingsTabVisible(t.id, currentRole))?.id ?? 'company';
 }

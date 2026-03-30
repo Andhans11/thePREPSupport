@@ -1,13 +1,18 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { supabase } from '../services/supabase';
 import { useAuth } from '../contexts/AuthContext';
 import { useTenant } from '../contexts/TenantContext';
 import { useCurrentUserRole } from '../hooks/useCurrentUserRole';
 import { useDashboard } from '../contexts/DashboardContext';
-import { canSeeTeamStatusDashboard, canAccessAnalytics, isAdmin, canReplyToTickets, canApproveRejectOwnSlots, canManagePlanningSlots } from '../types/roles';
+import { useModules } from '../contexts/ModulesContext';
+import { useGoogleCalendar } from '../contexts/GoogleCalendarContext';
+import { useToast } from '../contexts/ToastContext';
+import { canSeeTeamStatusDashboard, isAdmin, isManager, canReplyToTickets, canApproveRejectOwnSlots, canManagePlanningSlots } from '../types/roles';
+import { canAccessModule } from '../types/modules';
 import { formatListTime } from '../utils/formatters';
-import { format } from 'date-fns';
+import { addDays, endOfDay, format, isSameDay, startOfDay } from 'date-fns';
+import { nb } from 'date-fns/locale';
 import {
   AVAILABILITY_LABELS,
   AVAILABILITY_COLORS,
@@ -28,13 +33,29 @@ import {
   CalendarClock,
   Clock,
   Bell,
+  CalendarDays,
 } from 'lucide-react';
 
 import { getDisplayStatus } from '../contexts/DashboardContext';
+import { GoogleCalendarEventModal, type GoogleCalendarEventModalData } from '../components/calendar/GoogleCalendarEventModal';
+import { setCalendarEventOwner } from '../services/calendarEventOwner';
+import { setCalendarEventHiddenFromApp } from '../services/calendarEventVisibility';
 
 const CHART_PAD = { left: 40, right: 24, top: 16, bottom: 28 };
 const CHART_HEIGHT = 200;
 const CHART_VIEW_WIDTH = 800;
+
+interface DashboardCalendarEvent {
+  id: string;
+  summary: string | null;
+  description: string | null;
+  start_at: string;
+  end_at: string;
+  is_all_day: boolean;
+  owner_team_member_id: string | null;
+  raw_json: Record<string, unknown> | null;
+  hidden_from_app?: boolean;
+}
 
 /** Line chart: two trendlines (åpnet / lukket) over last 30 days with grid and axes. */
 function MonthTrendlineChart({
@@ -163,7 +184,9 @@ export function DashboardPage() {
   const { user } = useAuth();
   const { currentTenantId } = useTenant();
   const { role } = useCurrentUserRole();
+  const canManageGoogleCalendarHidden = isAdmin(role) || isManager(role);
   const {
+    ticketMetricsScope,
     statusCounts,
     mine,
     unassigned,
@@ -184,9 +207,17 @@ export function DashboardPage() {
   } = useDashboard();
   const showTeamStatus = canSeeTeamStatusDashboard(role);
   const canApproveRejectSlots = canApproveRejectOwnSlots(role);
-  const showAnalytics = canAccessAnalytics(role);
+  const { analyticsEnabled, planningEnabled, calendarEnabled, roleAccess: moduleRoleAccess } = useModules();
+  const showAnalytics = canAccessModule('analytics', analyticsEnabled, moduleRoleAccess.analytics, role);
+  const showPlanningModule = canAccessModule('planning', planningEnabled, moduleRoleAccess.planning, role);
+  const showCalendarModule = canAccessModule('calendar', calendarEnabled, moduleRoleAccess.calendar, role);
   const showAdminLinks = isAdmin(role);
+  const { connection: calendarConnection } = useGoogleCalendar();
+  const toast = useToast();
   const [recentTab, setRecentTab] = useState<'mine' | 'unassigned'>('mine');
+  const [upcomingCalendarEvents, setUpcomingCalendarEvents] = useState<DashboardCalendarEvent[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [selectedCalendarEvent, setSelectedCalendarEvent] = useState<GoogleCalendarEventModalData | null>(null);
 
   const statusDisplayConfig: Record<AvailabilityStatus, { Icon: typeof Check }> = {
     active: { Icon: Check },
@@ -195,11 +226,176 @@ export function DashboardPage() {
     offline: { Icon: X },
   };
 
-  const openCount = statusCounts['open'] ?? statusCounts['new'] ?? 0;
+  const openCount = (statusCounts['open'] ?? 0) + (statusCounts['new'] ?? 0);
   const weekMax = Math.max(1, ...weekOpenedByDay.map((d) => d.count));
   const monthMax = Math.max(1, ...monthTrend.flatMap((d) => [d.opened, d.closed]));
 
   const displayName = user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Bruker';
+  const memberOptions = useMemo(
+    () =>
+      teamMembers.map((m) => ({
+        id: m.id,
+        name: m.name?.trim() || m.email?.trim() || 'Ukjent bruker',
+      })),
+    [teamMembers]
+  );
+
+  useEffect(() => {
+    async function fetchUpcomingCalendarEvents() {
+      if (!currentTenantId || !calendarConnection.connected) {
+        setUpcomingCalendarEvents([]);
+        return;
+      }
+      setCalendarLoading(true);
+      const start = startOfDay(new Date());
+      const rangeEnd = endOfDay(addDays(new Date(), 7));
+      const { data } = await supabase
+        .from('google_calendar_events')
+        .select('id, summary, description, start_at, end_at, is_all_day, owner_team_member_id, raw_json, hidden_from_app')
+        .eq('tenant_id', currentTenantId)
+        .eq('hidden_from_app', false)
+        .gte('start_at', start.toISOString())
+        .lte('start_at', rangeEnd.toISOString())
+        .order('start_at', { ascending: true });
+      setUpcomingCalendarEvents((data as DashboardCalendarEvent[]) ?? []);
+      setCalendarLoading(false);
+    }
+    fetchUpcomingCalendarEvents();
+  }, [currentTenantId, calendarConnection.connected]);
+
+  const calendarBookingsToday = useMemo(() => {
+    const now = new Date();
+    return upcomingCalendarEvents.filter((e) => isSameDay(new Date(e.start_at), now));
+  }, [upcomingCalendarEvents]);
+
+  const calendarBookingsNext7Days = useMemo(() => {
+    const tomorrow = startOfDay(addDays(new Date(), 1));
+    const lastIncluded = endOfDay(addDays(new Date(), 7));
+    return upcomingCalendarEvents.filter((e) => {
+      const s = new Date(e.start_at);
+      return s >= tomorrow && s <= lastIncluded;
+    });
+  }, [upcomingCalendarEvents]);
+
+  const assignCalendarOwner = async (
+    eventId: string,
+    ownerTeamMemberId: string | null,
+    previousOwnerId: string | null
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!currentTenantId) return { ok: false, error: 'Ingen organisasjon valgt.' };
+    const ev = upcomingCalendarEvents.find((e) => e.id === eventId);
+    const result = await setCalendarEventOwner({
+      tenantId: currentTenantId,
+      eventId,
+      ownerTeamMemberId,
+      eventSummary: ev?.summary ?? null,
+      previousOwnerId,
+      notifyNewOwner: true,
+    });
+    if (!result.ok) return result;
+    setUpcomingCalendarEvents((prev) =>
+      prev.map((e) => (e.id === eventId ? { ...e, owner_team_member_id: ownerTeamMemberId } : e))
+    );
+    setSelectedCalendarEvent((prev) =>
+      prev && prev.id === eventId ? { ...prev, owner_team_member_id: ownerTeamMemberId } : prev
+    );
+    if (ownerTeamMemberId) {
+      toast.success('Eier lagret. Ny eier har fått varsel.');
+    } else {
+      toast.success('Eier oppdatert.');
+    }
+    return { ok: true };
+  };
+
+  const handleCalendarHiddenChange = async (hidden: boolean): Promise<{ ok: boolean; error?: string }> => {
+    if (!currentTenantId || !selectedCalendarEvent) return { ok: false, error: 'Ingen hendelse valgt.' };
+    const result = await setCalendarEventHiddenFromApp({
+      tenantId: currentTenantId,
+      eventId: selectedCalendarEvent.id,
+      hidden,
+    });
+    if (!result.ok) return result;
+    if (hidden) {
+      setUpcomingCalendarEvents((prev) => prev.filter((e) => e.id !== selectedCalendarEvent.id));
+      setSelectedCalendarEvent(null);
+      toast.success('Hendelsen skjules på dashbord og kalender.');
+    } else {
+      setUpcomingCalendarEvents((prev) =>
+        prev.map((e) => (e.id === selectedCalendarEvent.id ? { ...e, hidden_from_app: false } : e))
+      );
+      setSelectedCalendarEvent((prev) => (prev ? { ...prev, hidden_from_app: false } : null));
+      toast.success('Hendelsen vises igjen.');
+    }
+    return { ok: true };
+  };
+
+  const renderCalendarEventRow = (event: DashboardCalendarEvent) => {
+    const ownerName = memberOptions.find((m) => m.id === event.owner_team_member_id)?.name ?? null;
+    const hasOwner = Boolean(event.owner_team_member_id);
+    const start = new Date(event.start_at);
+    const end = new Date(event.end_at);
+    const dayLabel = isSameDay(start, new Date()) ? 'I dag' : format(start, 'EEE d. MMM', { locale: nb });
+    return (
+      <li
+        key={event.id}
+        className={
+          hasOwner
+            ? 'p-3 rounded-lg border bg-emerald-50/90 dark:bg-emerald-950/35 border-emerald-200 dark:border-emerald-800/80'
+            : 'p-3 rounded-lg border bg-red-50/90 dark:bg-red-950/35 border-red-200 dark:border-red-800/80'
+        }
+      >
+        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={() => setSelectedCalendarEvent(event)}
+            onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setSelectedCalendarEvent(event)}
+            className={
+              hasOwner
+                ? 'min-w-0 flex-1 text-left rounded-md hover:bg-emerald-100/70 dark:hover:bg-emerald-900/30 cursor-pointer -m-1 p-1'
+                : 'min-w-0 flex-1 text-left rounded-md hover:bg-red-100/70 dark:hover:bg-red-900/30 cursor-pointer -m-1 p-1'
+            }
+          >
+            <p className="text-sm font-medium text-[var(--hiver-text)]">{event.summary || '(Uten tittel)'}</p>
+            <p className="text-xs text-[var(--hiver-text-muted)] mt-0.5">
+              <span className="font-medium text-[var(--hiver-text)]">{dayLabel}</span>
+              {' · '}
+              {event.is_all_day
+                ? 'Heldag'
+                : `${format(start, 'HH:mm', { locale: nb })}–${format(end, 'HH:mm', { locale: nb })}`}
+              {ownerName ? ` · Eier: ${ownerName}` : ''}
+            </p>
+          </div>
+          {!event.owner_team_member_id && memberOptions.length > 0 && (
+            <div className="shrink-0 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+              <label className="sr-only" htmlFor={`cal-owner-${event.id}`}>
+                Velg eier
+              </label>
+              <select
+                id={`cal-owner-${event.id}`}
+                defaultValue=""
+                className="text-sm rounded-lg border border-[var(--hiver-border)] px-2 py-1.5 bg-[var(--hiver-panel-bg)] text-[var(--hiver-text)] max-w-[220px]"
+                onChange={async (e) => {
+                  const next = e.target.value || null;
+                  if (!next) return;
+                  e.target.value = '';
+                  const r = await assignCalendarOwner(event.id, next, null);
+                  if (!r.ok) toast.error(r.error || 'Kunne ikke lagre eier.');
+                }}
+              >
+                <option value="">Velg eier…</option>
+                {memberOptions.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+      </li>
+    );
+  };
 
   const dashboardSubtitle =
     role === 'admin'
@@ -276,6 +472,7 @@ export function DashboardPage() {
       )}
 
       {/* Planning: two cards (På vakt nå | Neste arbeidsdag) + approval card for my pending slots */}
+      {showPlanningModule && (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 lg:gap-5 mb-6 lg:mb-8">
         {/* Card 1: På vakt nå */}
         <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
@@ -491,9 +688,54 @@ export function DashboardPage() {
           </div>
         )}
       </div>
+      )}
+
+      {/* Calendar: upcoming Google events */}
+      {showCalendarModule && calendarConnection.connected && (
+        <div className="mb-6 lg:mb-8 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          <div className="p-5 lg:p-6">
+            <div className="flex items-center justify-between gap-3 mb-2">
+              <div className="flex items-center gap-2">
+                <CalendarDays className="w-5 h-5 text-[var(--hiver-accent)]" />
+                <h2 className="text-base font-semibold text-[var(--hiver-text)]">Kommende kalenderhendelser</h2>
+              </div>
+              <Link to="/kalender" className="text-sm font-medium text-[var(--hiver-accent)] hover:underline">
+                Åpne kalender
+              </Link>
+            </div>
+            <p className="text-xs text-[var(--hiver-text-muted)] mb-4">
+              Viser i dag og neste 7 dager (fra i morgen). Uten eier kan du velge ansvarlig her; personen får varsel.
+            </p>
+            {calendarLoading ? (
+              <p className="text-sm text-[var(--hiver-text-muted)]">Laster kalenderhendelser…</p>
+            ) : calendarBookingsToday.length === 0 && calendarBookingsNext7Days.length === 0 ? (
+              <p className="text-sm text-[var(--hiver-text-muted)]">Ingen bookinger i dag eller de neste 7 dagene.</p>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 lg:gap-8">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-[var(--hiver-text)] mb-3">Bookinger i dag</h3>
+                  {calendarBookingsToday.length === 0 ? (
+                    <p className="text-sm text-[var(--hiver-text-muted)]">Ingen bookinger i dag.</p>
+                  ) : (
+                    <ul className="space-y-2">{calendarBookingsToday.map(renderCalendarEventRow)}</ul>
+                  )}
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-semibold text-[var(--hiver-text)] mb-3">Booking neste 7 dager</h3>
+                  {calendarBookingsNext7Days.length === 0 ? (
+                    <p className="text-sm text-[var(--hiver-text-muted)]">Ingen bookinger de neste 7 dagene.</p>
+                  ) : (
+                    <ul className="space-y-2">{calendarBookingsNext7Days.map(renderCalendarEventRow)}</ul>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Admin/manager: pending slot applications from team (this + next week) */}
-      {canManagePlanningSlots(role) && pendingSlotsFromTeam.length > 0 && (
+      {showPlanningModule && canManagePlanningSlots(role) && pendingSlotsFromTeam.length > 0 && (
         <div className="mb-6 lg:mb-8 card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
           <div className="p-5 lg:p-6">
             <div className="flex items-center justify-between gap-4 mb-2 flex-wrap">
@@ -570,81 +812,6 @@ export function DashboardPage() {
       <div className={`grid gap-4 lg:gap-5 items-stretch ${showTeamStatus ? 'grid-cols-1 lg:grid-cols-[1fr_minmax(280px,360px)]' : 'grid-cols-1'}`}>
         {/* Left column: all dashboard cards, each full width */}
         <div className="flex flex-col gap-4 lg:gap-5 min-w-0">
-          {/* Infographic: Åpen, Mine, Ufordelt */}
-          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
-          <div className="p-5 lg:p-6">
-            <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider mb-4">
-              Saker nå
-            </p>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="flex flex-col items-center rounded-xl bg-[var(--hiver-bg)]/80 py-4 px-3 border border-[var(--hiver-border)]/60">
-                <span className="text-2xl lg:text-3xl font-bold text-[var(--status-open)] tabular-nums">{openCount}</span>
-                <span className="text-xs font-medium text-[var(--hiver-text-muted)] mt-1 uppercase tracking-wider">Åpen</span>
-              </div>
-              <div className="flex flex-col items-center rounded-xl bg-[var(--hiver-bg)]/80 py-4 px-3 border border-[var(--hiver-border)]/60">
-                <span className="text-2xl lg:text-3xl font-bold text-[var(--hiver-accent)] tabular-nums">{mine}</span>
-                <span className="text-xs font-medium text-[var(--hiver-text-muted)] mt-1 uppercase tracking-wider">Mine</span>
-              </div>
-              <div className="flex flex-col items-center rounded-xl bg-[var(--hiver-bg)]/80 py-4 px-3 border border-[var(--hiver-border)]/60">
-                <span className="text-2xl lg:text-3xl font-bold text-[var(--status-pending)] tabular-nums">{unassigned}</span>
-                <span className="text-xs font-medium text-[var(--hiver-text-muted)] mt-1 uppercase tracking-wider">Ufordelt</span>
-              </div>
-            </div>
-          </div>
-          </div>
-
-          {/* This week: opened tickets by day */}
-          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
-          <div className="p-5 lg:p-6 flex flex-col h-full">
-            <div className="flex items-center gap-2 mb-4">
-              <BarChart3 className="w-5 h-5 text-[var(--hiver-accent)]" />
-              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider">
-                Åpne saker denne uken
-              </p>
-            </div>
-            <div className="flex items-end justify-between gap-1 flex-1 min-h-[120px]">
-              {weekOpenedByDay.map(({ date, label, count }) => (
-                <div key={date} className="flex flex-col items-center flex-1 min-w-0">
-                  <span className="text-[10px] font-medium text-[var(--hiver-text-muted)] mb-1 truncate w-full text-center">{label}</span>
-                  <div className="w-full flex justify-center" style={{ height: 80 }}>
-                    <div
-                      className="w-full max-w-[24px] rounded-t bg-[var(--hiver-accent)] transition-all duration-300"
-                      style={{ height: `${(count / weekMax) * 100}%`, minHeight: count > 0 ? 4 : 0 }}
-                      title={`${label}: ${count}`}
-                    />
-                  </div>
-                  <span className="text-xs font-semibold text-[var(--hiver-text)] tabular-nums mt-1">{count}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-          </div>
-
-          {/* Last 30 days: opened vs closed trendline (manager + admin only) */}
-          {showAnalytics && (
-          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
-            <div className="p-5 lg:p-6 flex flex-col">
-              <div className="flex items-center gap-2 mb-4">
-                <TrendingUp className="w-5 h-5 text-[var(--hiver-accent)]" />
-                <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider">
-                  Saker siste 30 dager (åpnet og lukket)
-                </p>
-              </div>
-              <MonthTrendlineChart data={monthTrend} yMax={monthMax} />
-              <div className="flex items-center gap-6 mt-3 pt-3 border-t border-[var(--hiver-border)]">
-                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--hiver-text-muted)]">
-                  <span className="w-3 h-0.5 rounded-full shrink-0" style={{ backgroundColor: 'var(--hiver-accent)' }} aria-hidden />
-                  Åpnet
-                </span>
-                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--hiver-text-muted)]">
-                  <span className="w-3 h-0.5 rounded-full bg-emerald-500" aria-hidden />
-                  Lukket
-                </span>
-              </div>
-            </div>
-          </div>
-          )}
-
           {/* Recent tickets with tabs Mine / Ufordelte */}
           <div className="flex flex-col min-h-[280px] card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
           <div className="flex items-center justify-between px-5 lg:px-6 py-3 border-b border-[var(--hiver-border)] shrink-0">
@@ -722,6 +889,88 @@ export function DashboardPage() {
             })()}
           </div>
           </div>
+
+          {/* Infographic: Åpen, Mine, Ufordelt */}
+          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          <div className="p-5 lg:p-6">
+            <div className="mb-4">
+              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider">
+                Saker nå
+              </p>
+              {ticketMetricsScope === 'team' && (
+                <p className="text-xs text-[var(--hiver-text-muted)] mt-1">
+                  Tildelte og teamets saker
+                </p>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="flex flex-col items-center rounded-xl bg-[var(--hiver-bg)]/80 py-4 px-3 border border-[var(--hiver-border)]/60">
+                <span className="text-2xl lg:text-3xl font-bold text-[var(--status-open)] tabular-nums">{openCount}</span>
+                <span className="text-xs font-medium text-[var(--hiver-text-muted)] mt-1 uppercase tracking-wider">Åpen</span>
+              </div>
+              <div className="flex flex-col items-center rounded-xl bg-[var(--hiver-bg)]/80 py-4 px-3 border border-[var(--hiver-border)]/60">
+                <span className="text-2xl lg:text-3xl font-bold text-[var(--hiver-accent)] tabular-nums">{mine}</span>
+                <span className="text-xs font-medium text-[var(--hiver-text-muted)] mt-1 uppercase tracking-wider">Mine</span>
+              </div>
+              <div className="flex flex-col items-center rounded-xl bg-[var(--hiver-bg)]/80 py-4 px-3 border border-[var(--hiver-border)]/60">
+                <span className="text-2xl lg:text-3xl font-bold text-[var(--status-pending)] tabular-nums">{unassigned}</span>
+                <span className="text-xs font-medium text-[var(--hiver-text-muted)] mt-1 uppercase tracking-wider">Ufordelt</span>
+              </div>
+            </div>
+          </div>
+          </div>
+
+          {/* This week: opened tickets by day */}
+          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+          <div className="p-5 lg:p-6 flex flex-col h-full">
+            <div className="flex items-center gap-2 mb-4">
+              <BarChart3 className="w-5 h-5 text-[var(--hiver-accent)]" />
+              <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider">
+                Åpne saker denne uken
+              </p>
+            </div>
+            <div className="flex items-end justify-between gap-1 flex-1 min-h-[120px]">
+              {weekOpenedByDay.map(({ date, label, count }) => (
+                <div key={date} className="flex flex-col items-center flex-1 min-w-0">
+                  <span className="text-[10px] font-medium text-[var(--hiver-text-muted)] mb-1 truncate w-full text-center">{label}</span>
+                  <div className="w-full flex justify-center" style={{ height: 80 }}>
+                    <div
+                      className="w-full max-w-[24px] rounded-t bg-[var(--hiver-accent)] transition-all duration-300"
+                      style={{ height: `${(count / weekMax) * 100}%`, minHeight: count > 0 ? 4 : 0 }}
+                      title={`${label}: ${count}`}
+                    />
+                  </div>
+                  <span className="text-xs font-semibold text-[var(--hiver-text)] tabular-nums mt-1">{count}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          </div>
+
+          {/* Last 30 days: opened vs closed trendline (manager + admin only) */}
+          {showAnalytics && (
+          <div className="card-panel rounded-2xl overflow-hidden bg-[var(--hiver-panel-bg)] border border-[var(--hiver-border)] shadow-sm">
+            <div className="p-5 lg:p-6 flex flex-col">
+              <div className="flex items-center gap-2 mb-4">
+                <TrendingUp className="w-5 h-5 text-[var(--hiver-accent)]" />
+                <p className="text-xs font-medium text-[var(--hiver-text-muted)] uppercase tracking-wider">
+                  Saker siste 30 dager (åpnet og lukket)
+                </p>
+              </div>
+              <MonthTrendlineChart data={monthTrend} yMax={monthMax} />
+              <div className="flex items-center gap-6 mt-3 pt-3 border-t border-[var(--hiver-border)]">
+                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--hiver-text-muted)]">
+                  <span className="w-3 h-0.5 rounded-full shrink-0" style={{ backgroundColor: 'var(--hiver-accent)' }} aria-hidden />
+                  Åpnet
+                </span>
+                <span className="inline-flex items-center gap-1.5 text-xs text-[var(--hiver-text-muted)]">
+                  <span className="w-3 h-0.5 rounded-full bg-emerald-500" aria-hidden />
+                  Lukket
+                </span>
+              </div>
+            </div>
+          </div>
+          )}
         </div>
 
         {/* Right column: Brukere only (admin + manager), full height */}
@@ -774,6 +1023,14 @@ export function DashboardPage() {
           </div>
         )}
       </div>
+
+      <GoogleCalendarEventModal
+        event={selectedCalendarEvent}
+        memberOptions={memberOptions}
+        onClose={() => setSelectedCalendarEvent(null)}
+        onAssignOwner={assignCalendarOwner}
+        onHiddenChange={canManageGoogleCalendarHidden ? handleCalendarHiddenChange : undefined}
+      />
     </div>
   );
 }

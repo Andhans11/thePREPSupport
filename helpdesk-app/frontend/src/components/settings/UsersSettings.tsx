@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Plus, UserPlus, Loader2, X, Copy, Mail, MailPlus, Trash2, UserCheck, UserX, Mail as MailIcon } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Plus, UserPlus, Loader2, X, Copy, Mail, MailPlus, Trash2, UserCheck, UserX, Mail as MailIcon, Search } from 'lucide-react';
 import { supabase } from '../../services/supabase';
 import { useTenant } from '../../contexts/TenantContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../contexts/ToastContext';
-import { ROLES, ROLE_LABELS, type Role } from '../../types/roles';
+import { ROLES, ROLE_LABELS, canManageUsers, canViewTeamDirectory, type Role } from '../../types/roles';
+import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
 import { sendInvitationEmail } from '../../services/api';
 import { Select } from '../ui/Select';
 import { SaveButton } from '../ui/SaveButton';
@@ -53,11 +54,13 @@ interface TeamMemberRow {
   available_for_email?: boolean;
   email_on_new_ticket?: boolean;
   email_on_notifications?: boolean;
+  notify_on_calendar_events?: boolean;
 }
 
 interface TeamOption {
   id: string;
   name: string;
+  manager_team_member_id: string | null;
 }
 
 interface MemberTeam {
@@ -68,6 +71,9 @@ interface MemberTeam {
 export function UsersSettings() {
   const { currentTenantId } = useTenant();
   const { user: currentUser } = useAuth();
+  const { role: currentRole, teamMemberId: myTeamMemberId } = useCurrentUserRole();
+  const manageUsers = canManageUsers(currentRole);
+  const teamDirectoryOnly = canViewTeamDirectory(currentRole) && !manageUsers;
   const toast = useToast();
   const [members, setMembers] = useState<TeamMemberRow[]>([]);
   const [teams, setTeams] = useState<TeamOption[]>([]);
@@ -84,6 +90,7 @@ export function UsersSettings() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
+  const [memberSearch, setMemberSearch] = useState('');
   const [modalMember, setModalMember] = useState<TeamMemberRow | null>(null);
 
   const fetchMembers = useCallback(async () => {
@@ -91,8 +98,8 @@ export function UsersSettings() {
     setLoading(true);
     const tenantId = currentTenantId;
     const [membersRes, teamsRes, memberTeamsRes] = await Promise.all([
-      supabase.from('team_members').select('id, user_id, name, email, role, is_active, available_for_email, email_on_new_ticket, email_on_notifications').eq('tenant_id', tenantId).order('name'),
-      supabase.from('teams').select('id, name').eq('tenant_id', tenantId).order('name'),
+      supabase.from('team_members').select('id, user_id, name, email, role, is_active, available_for_email, email_on_new_ticket, email_on_notifications, notify_on_calendar_events').eq('tenant_id', tenantId).order('name'),
+      supabase.from('teams').select('id, name, manager_team_member_id').eq('tenant_id', tenantId).order('name'),
       supabase.from('team_member_teams').select('team_member_id, team_id'),
     ]);
     const membersList = (membersRes.data as TeamMemberRow[]) || [];
@@ -207,6 +214,7 @@ export function UsersSettings() {
       toast.error(e.message);
     } else {
       setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, role } : m)));
+      setModalMember((prev) => (prev && prev.id === id ? { ...prev, role } : prev));
       toast.success('Rolle er oppdatert');
     }
     setSaving(null);
@@ -226,6 +234,7 @@ export function UsersSettings() {
       toast.error(e.message);
     } else {
       setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, is_active } : m)));
+      setModalMember((prev) => (prev && prev.id === id ? { ...prev, is_active } : prev));
       toast.success(is_active ? 'Bruker er aktivert' : 'Bruker er deaktivert');
     }
     setSaving(null);
@@ -271,6 +280,26 @@ export function UsersSettings() {
     setSaving(null);
   };
 
+  const handleToggleCalendarNotifications = async (id: string, notify_on_calendar_events: boolean) => {
+    if (!currentTenantId) return;
+    setSaving(id);
+    setError(null);
+    const { error: e } = await supabase
+      .from('team_members')
+      .update({ notify_on_calendar_events })
+      .eq('id', id)
+      .eq('tenant_id', currentTenantId);
+    if (e) {
+      setError(e.message);
+      toast.error(e.message);
+    } else {
+      setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, notify_on_calendar_events } : m)));
+      setModalMember((prev) => (prev && prev.id === id ? { ...prev, notify_on_calendar_events } : prev));
+      toast.success(notify_on_calendar_events ? 'Kalendervarsler er aktivert' : 'Kalendervarsler er deaktivert');
+    }
+    setSaving(null);
+  };
+
   const handleToggleAvailability = async (id: string, value: boolean) => {
     if (!currentTenantId) return;
     setSaving(id);
@@ -285,6 +314,7 @@ export function UsersSettings() {
       toast.error(e.message);
     } else {
       setMembers((prev) => prev.map((m) => (m.id === id ? { ...m, available_for_email: value } : m)));
+      setModalMember((prev) => (prev && prev.id === id ? { ...prev, available_for_email: value } : prev));
       toast.success('E-postvarsling er oppdatert');
     }
     setSaving(null);
@@ -365,12 +395,35 @@ export function UsersSettings() {
   const adminCount = members.filter((m) => m.role === 'admin').length;
   const currentUserId = currentUser?.id ?? null;
 
-  const filteredMembers =
-    filterTab === 'active'
-      ? members.filter((m) => m.is_active)
-      : filterTab === 'inactive'
-        ? members.filter((m) => !m.is_active)
-        : members;
+  const scopedTeamIds = useMemo((): string[] | null => {
+    if (manageUsers) return null;
+    if (!myTeamMemberId) return [];
+    const fromMembership = memberTeams.filter((mt) => mt.team_member_id === myTeamMemberId).map((mt) => mt.team_id);
+    const fromManaged = teams.filter((t) => t.manager_team_member_id === myTeamMemberId).map((t) => t.id);
+    return [...new Set([...fromMembership, ...fromManaged])];
+  }, [manageUsers, myTeamMemberId, memberTeams, teams]);
+
+  const tabFilteredMembers = useMemo(() => {
+    if (filterTab === 'active') return members.filter((m) => m.is_active);
+    if (filterTab === 'inactive') return members.filter((m) => !m.is_active);
+    return members;
+  }, [members, filterTab]);
+
+  const scopeFilteredMembers = useMemo(() => {
+    if (scopedTeamIds === null) return tabFilteredMembers;
+    return tabFilteredMembers.filter((m) => {
+      const mids = memberTeams.filter((mt) => mt.team_member_id === m.id).map((mt) => mt.team_id);
+      return mids.some((tid) => scopedTeamIds.includes(tid));
+    });
+  }, [tabFilteredMembers, scopedTeamIds, memberTeams]);
+
+  const displayMembers = useMemo(() => {
+    const q = memberSearch.trim().toLowerCase();
+    if (!q) return scopeFilteredMembers;
+    return scopeFilteredMembers.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.email.toLowerCase().includes(q)
+    );
+  }, [scopeFilteredMembers, memberSearch]);
 
   if (loading) {
     return (
@@ -392,11 +445,14 @@ export function UsersSettings() {
         <div>
           <h2 className="text-xl font-semibold text-[var(--hiver-text)] tracking-tight">Teammedlemmer</h2>
           <p className="text-sm text-[var(--hiver-text-muted)] mt-0.5">
-            {filteredMembers.length} {filteredMembers.length === 1 ? 'bruker' : 'brukere'}
+            {teamDirectoryOnly ? (
+              <span className="block mb-1">Kun team du er medlem eller leder for.</span>
+            ) : null}
+            {displayMembers.length} {displayMembers.length === 1 ? 'bruker' : 'brukere'}
             {filterTab !== 'all' && ` (${members.length} totalt)`}
           </p>
         </div>
-        {!adding && (
+        {!adding && manageUsers && (
           <button
             type="button"
             onClick={() => setAdding(true)}
@@ -408,22 +464,35 @@ export function UsersSettings() {
         )}
       </div>
 
-      {/* Filter tabs */}
-      <div className="flex gap-1 p-1 rounded-xl bg-[var(--hiver-bg)] border border-[var(--hiver-border)] w-fit">
-        {tabs.map(({ value, label }) => (
-          <button
-            key={value}
-            type="button"
-            onClick={() => setFilterTab(value)}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              filterTab === value
-                ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-text)] shadow-sm'
-                : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      {/* Filter tabs + search */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+        <div className="flex gap-1 p-1 rounded-xl bg-[var(--hiver-bg)] border border-[var(--hiver-border)] w-fit shrink-0">
+          {tabs.map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setFilterTab(value)}
+              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                filterTab === value
+                  ? 'bg-[var(--hiver-panel-bg)] text-[var(--hiver-text)] shadow-sm'
+                  : 'text-[var(--hiver-text-muted)] hover:text-[var(--hiver-text)]'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <div className="relative flex-1 min-w-0 max-w-md">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[var(--hiver-text-muted)] pointer-events-none" />
+          <input
+            type="search"
+            value={memberSearch}
+            onChange={(e) => setMemberSearch(e.target.value)}
+            placeholder="Søk på navn eller e-post…"
+            className="w-full rounded-xl border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] pl-9 pr-3 py-2 text-sm text-[var(--hiver-text)] placeholder:text-[var(--hiver-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--hiver-accent)]/30"
+            aria-label="Filtrer på navn eller e-post"
+          />
+        </div>
       </div>
 
       {error && (
@@ -460,7 +529,13 @@ export function UsersSettings() {
         </div>
       )}
 
-      {adding && (
+      {teamDirectoryOnly && scopedTeamIds?.length === 0 && (
+        <div className="p-4 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-200 text-sm">
+          Du er ikke knyttet til et team ennå. Be en administrator om å legge deg til i et team for å se kolleger her.
+        </div>
+      )}
+
+      {adding && manageUsers && (
         <div className="card-panel p-5 space-y-4 rounded-xl">
           <h3 className="text-base font-medium text-[var(--hiver-text)]">Legg til teammedlem</h3>
           <p className="text-sm text-[var(--hiver-text-muted)]">
@@ -509,21 +584,27 @@ export function UsersSettings() {
       )}
 
       <div className="space-y-3">
-        {filteredMembers.length === 0 ? (
+        {displayMembers.length === 0 ? (
           <div className="card-panel rounded-xl p-10 text-center">
             <p className="text-[var(--hiver-text-muted)] text-sm">
               {members.length === 0
-                ? 'Ingen teammedlemmer ennå. Legg til en bruker over.'
-                : filterTab === 'active'
-                  ? 'Ingen aktive brukere.'
-                  : filterTab === 'inactive'
-                    ? 'Ingen inaktive brukere.'
-                    : 'Ingen teammedlemmer.'}
+                ? manageUsers
+                  ? 'Ingen teammedlemmer ennå. Legg til en bruker over.'
+                  : 'Ingen teammedlemmer ennå.'
+                : memberSearch.trim()
+                  ? 'Ingen treff for søket.'
+                  : filterTab === 'active'
+                    ? 'Ingen aktive brukere.'
+                    : filterTab === 'inactive'
+                      ? 'Ingen inaktive brukere.'
+                      : teamDirectoryOnly && scopedTeamIds?.length === 0
+                        ? 'Ingen teammedlemmer å vise.'
+                        : 'Ingen teammedlemmer.'}
             </p>
           </div>
         ) : (
           <ul className="space-y-3">
-            {filteredMembers.map((m) => {
+            {displayMembers.map((m) => {
               const memberTeamIds = getMemberTeamIds(m.id);
               return (
                 <li key={m.id}>
@@ -565,39 +646,6 @@ export function UsersSettings() {
                         <span className="text-xs px-2.5 py-1 rounded-lg bg-[var(--hiver-bg)] text-[var(--hiver-text-muted)] font-medium">
                           {ROLE_LABELS[m.role]}
                         </span>
-                        <div className="flex items-center gap-4" onClick={(e) => e.stopPropagation()}>
-                          <div className="flex items-center gap-2">
-                            <ToggleSwitch
-                              checked={m.is_active}
-                              onChange={(v) => handleToggleActive(m.id, v)}
-                              disabled={saving === m.id}
-                              label={m.is_active ? 'Deaktiver' : 'Aktiver'}
-                            />
-                            <span className="text-xs text-[var(--hiver-text-muted)] w-8">Aktiv</span>
-                          </div>
-                          {m.user_id && m.email && (
-                            <>
-                              <div className="flex items-center gap-2" title="Motta e-post når en ny sak opprettes">
-                                <ToggleSwitch
-                                  checked={!!m.email_on_new_ticket}
-                                  onChange={(v) => handleToggleEmailOnNewTicket(m.id, v)}
-                                  disabled={saving === m.id}
-                                  label={m.email_on_new_ticket ? 'Slå av e-post ved ny sak' : 'Slå på e-post ved ny sak'}
-                                />
-                                <span className="text-xs text-[var(--hiver-text-muted)] whitespace-nowrap">E-post ved ny sak</span>
-                              </div>
-                              <div className="flex items-center gap-2" title="Motta e-post ved tildeling, kommentar eller kundesvar">
-                                <ToggleSwitch
-                                  checked={!!m.email_on_notifications}
-                                  onChange={(v) => handleToggleEmailOnNotifications(m.id, v)}
-                                  disabled={saving === m.id}
-                                  label={m.email_on_notifications ? 'Slå av e-post ved varsler' : 'Slå på e-post ved varsler'}
-                                />
-                                <span className="text-xs text-[var(--hiver-text-muted)] whitespace-nowrap">E-post ved varsler</span>
-                              </div>
-                            </>
-                          )}
-                        </div>
                       </div>
                     </div>
                     {memberTeamIds.length > 0 && (
@@ -639,7 +687,7 @@ export function UsersSettings() {
           >
             <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--hiver-border)] shrink-0">
               <h3 id="member-modal-title" className="text-lg font-semibold text-[var(--hiver-text)]">
-                Rediger bruker
+                {manageUsers ? 'Rediger bruker' : 'Brukerdetaljer'}
               </h3>
               <button
                 type="button"
@@ -659,75 +707,102 @@ export function UsersSettings() {
                 )}
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-[var(--hiver-text-muted)] mb-2">Rolle</label>
-                <Select
-                  value={modalMember.role}
-                  onChange={(v) => handleUpdateRole(modalMember.id, v as Role)}
-                  options={ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
-                  disabled={saving === modalMember.id}
-                  size="lg"
-                  className="w-full"
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  {modalMember.is_active ? (
-                    <UserCheck className="w-5 h-5 text-[var(--hiver-accent)]" />
-                  ) : (
-                    <UserX className="w-5 h-5 text-[var(--hiver-text-muted)]" />
-                  )}
-                  <span className="text-sm font-medium text-[var(--hiver-text)]">Aktiv</span>
-                </div>
-                <ToggleSwitch
-                  checked={modalMember.is_active}
-                  onChange={(v) => handleToggleActive(modalMember.id, v)}
-                  disabled={saving === modalMember.id}
-                  label="Aktiv"
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
-                  <span className="text-sm font-medium text-[var(--hiver-text)]">E-postvarsler</span>
-                </div>
-                <ToggleSwitch
-                  checked={modalMember.available_for_email !== false}
-                  onChange={(v) => handleToggleAvailability(modalMember.id, v)}
-                  disabled={saving === modalMember.id}
-                  label="E-post"
-                />
-              </div>
-
-              {modalMember.user_id && modalMember.email && (
+              {manageUsers ? (
                 <>
+                  <div>
+                    <label className="block text-sm font-medium text-[var(--hiver-text-muted)] mb-2">Rolle</label>
+                    <Select
+                      value={modalMember.role}
+                      onChange={(v) => handleUpdateRole(modalMember.id, v as Role)}
+                      options={ROLES.map((r) => ({ value: r, label: ROLE_LABELS[r] }))}
+                      disabled={saving === modalMember.id}
+                      size="lg"
+                      className="w-full"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      {modalMember.is_active ? (
+                        <UserCheck className="w-5 h-5 text-[var(--hiver-accent)]" />
+                      ) : (
+                        <UserX className="w-5 h-5 text-[var(--hiver-text-muted)]" />
+                      )}
+                      <span className="text-sm font-medium text-[var(--hiver-text)]">Aktiv</span>
+                    </div>
+                    <ToggleSwitch
+                      checked={modalMember.is_active}
+                      onChange={(v) => handleToggleActive(modalMember.id, v)}
+                      disabled={saving === modalMember.id}
+                      label="Aktiv"
+                    />
+                  </div>
+
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
-                      <span className="text-sm font-medium text-[var(--hiver-text)]">E-post ved ny sak</span>
+                      <span className="text-sm font-medium text-[var(--hiver-text)]">E-postvarsler</span>
                     </div>
                     <ToggleSwitch
-                      checked={!!modalMember.email_on_new_ticket}
-                      onChange={(v) => handleToggleEmailOnNewTicket(modalMember.id, v)}
+                      checked={modalMember.available_for_email !== false}
+                      onChange={(v) => handleToggleAvailability(modalMember.id, v)}
                       disabled={saving === modalMember.id}
-                      label="Motta e-post når en ny sak opprettes"
+                      label="E-post"
                     />
                   </div>
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
-                      <span className="text-sm font-medium text-[var(--hiver-text)]">E-post ved varsler</span>
-                    </div>
-                    <ToggleSwitch
-                      checked={!!modalMember.email_on_notifications}
-                      onChange={(v) => handleToggleEmailOnNotifications(modalMember.id, v)}
-                      disabled={saving === modalMember.id}
-                      label="E-post ved tildeling, kommentar eller kundesvar"
-                    />
-                  </div>
+
+                  {modalMember.user_id && modalMember.email && (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
+                          <span className="text-sm font-medium text-[var(--hiver-text)]">E-post ved ny sak</span>
+                        </div>
+                        <ToggleSwitch
+                          checked={!!modalMember.email_on_new_ticket}
+                          onChange={(v) => handleToggleEmailOnNewTicket(modalMember.id, v)}
+                          disabled={saving === modalMember.id}
+                          label="Motta e-post når en ny sak opprettes"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
+                          <span className="text-sm font-medium text-[var(--hiver-text)]">E-post ved varsler</span>
+                        </div>
+                        <ToggleSwitch
+                          checked={!!modalMember.email_on_notifications}
+                          onChange={(v) => handleToggleEmailOnNotifications(modalMember.id, v)}
+                          disabled={saving === modalMember.id}
+                          label="E-post ved tildeling, kommentar eller kundesvar"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <MailIcon className="w-5 h-5 text-[var(--hiver-text-muted)]" />
+                          <span className="text-sm font-medium text-[var(--hiver-text)]">Kalendervarsler</span>
+                        </div>
+                        <ToggleSwitch
+                          checked={!!modalMember.notify_on_calendar_events}
+                          onChange={(v) => handleToggleCalendarNotifications(modalMember.id, v)}
+                          disabled={saving === modalMember.id}
+                          label="Varsel ved nye/oppdaterte kalenderhendelser"
+                        />
+                      </div>
+                    </>
+                  )}
                 </>
+              ) : (
+                <div className="space-y-2 text-sm">
+                  <p>
+                    <span className="text-[var(--hiver-text-muted)]">Rolle: </span>
+                    <span className="text-[var(--hiver-text)] font-medium">{ROLE_LABELS[modalMember.role]}</span>
+                  </p>
+                  <p>
+                    <span className="text-[var(--hiver-text-muted)]">Status: </span>
+                    <span className="text-[var(--hiver-text)] font-medium">{modalMember.is_active ? 'Aktiv' : 'Inaktiv'}</span>
+                  </p>
+                </div>
               )}
 
               <div>
@@ -741,19 +816,21 @@ export function UsersSettings() {
                         className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[var(--hiver-accent)]/15 text-[var(--hiver-accent)] text-sm"
                       >
                         {team.name}
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveMemberFromTeam(modalMember.id, tid)}
-                          disabled={saving === modalMember.id}
-                          className="p-0.5 rounded hover:bg-[var(--hiver-accent)]/25 disabled:opacity-50"
-                          aria-label={`Fjern fra ${team.name}`}
-                        >
-                          <X className="w-3.5 h-3.5" />
-                        </button>
+                        {manageUsers ? (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveMemberFromTeam(modalMember.id, tid)}
+                            disabled={saving === modalMember.id}
+                            className="p-0.5 rounded hover:bg-[var(--hiver-accent)]/25 disabled:opacity-50"
+                            aria-label={`Fjern fra ${team.name}`}
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        ) : null}
                       </span>
                     ) : null;
                   })}
-                  {teams.filter((t) => !getMemberTeamIds(modalMember.id).includes(t.id)).length > 0 && (
+                  {manageUsers && teams.filter((t) => !getMemberTeamIds(modalMember.id).includes(t.id)).length > 0 && (
                     <Select
                       value=""
                       onChange={(v) => v && handleAddMemberToTeam(modalMember.id, v)}
@@ -767,7 +844,7 @@ export function UsersSettings() {
                 </div>
               </div>
 
-              {!modalMember.user_id && (
+              {manageUsers && !modalMember.user_id && (
                 <button
                   type="button"
                   onClick={() => handleResendInvitation(modalMember)}
@@ -783,51 +860,52 @@ export function UsersSettings() {
                 </button>
               )}
 
-              {confirmDeleteId === modalMember.id ? (
-                <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--hiver-border)]">
-                  <span className="text-sm text-amber-700 dark:text-amber-400">Slette denne brukeren?</span>
+              {manageUsers &&
+                (confirmDeleteId === modalMember.id ? (
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[var(--hiver-border)]">
+                    <span className="text-sm text-amber-700 dark:text-amber-400">Slette denne brukeren?</span>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const ok = await handleDeleteMember(modalMember.id);
+                        if (ok) setModalMember(null);
+                      }}
+                      disabled={deletingId === modalMember.id}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {deletingId === modalMember.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
+                      Ja, slett
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="px-3 py-1.5 rounded-lg border border-[var(--hiver-border)] text-sm text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]"
+                    >
+                      Avbryt
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    onClick={async () => {
-                      const ok = await handleDeleteMember(modalMember.id);
-                      if (ok) setModalMember(null);
-                    }}
-                    disabled={deletingId === modalMember.id}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                    onClick={() => setConfirmDeleteId(modalMember.id)}
+                    disabled={
+                      saving === modalMember.id ||
+                      (modalMember.user_id !== null && modalMember.user_id === currentUserId) ||
+                      (modalMember.role === 'admin' && adminCount <= 1)
+                    }
+                    className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium"
+                    title={
+                      modalMember.user_id === currentUserId
+                        ? 'Du kan ikke slette deg selv'
+                        : modalMember.role === 'admin' && adminCount <= 1
+                          ? 'Kan ikke slette siste admin'
+                          : 'Slett bruker'
+                    }
                   >
-                    {deletingId === modalMember.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                    Ja, slett
+                    <Trash2 className="w-4 h-4" />
+                    Slett bruker
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDeleteId(null)}
-                    className="px-3 py-1.5 rounded-lg border border-[var(--hiver-border)] text-sm text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]"
-                  >
-                    Avbryt
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeleteId(modalMember.id)}
-                  disabled={
-                    saving === modalMember.id ||
-                    (modalMember.user_id !== null && modalMember.user_id === currentUserId) ||
-                    (modalMember.role === 'admin' && adminCount <= 1)
-                  }
-                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 disabled:opacity-40 disabled:cursor-not-allowed text-sm font-medium"
-                  title={
-                    modalMember.user_id === currentUserId
-                      ? 'Du kan ikke slette deg selv'
-                      : modalMember.role === 'admin' && adminCount <= 1
-                        ? 'Kan ikke slette siste admin'
-                        : 'Slett bruker'
-                  }
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Slett bruker
-                </button>
-              )}
+                ))}
             </div>
           </div>
         </div>

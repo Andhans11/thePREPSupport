@@ -2,9 +2,11 @@
  * Role-based access for the helpdesk.
  *
  * - admin: Full access — company settings, Gmail, users, templates, all tickets.
- * - manager: Manager of one or more teams — see all team tickets, manage team member statuses, see team list on dashboard.
- * - agent: Support access — tickets, customers, templates (use only). No settings, no user management.
- * - viewer: Read-only — view tickets, customers, dashboard. No replies, no edits, no settings.
+ * - manager: Manager of one or more teams — see all tenant tickets, manage team member statuses, team list on dashboard;
+ *   optional read-only team directory under Innstillinger (same teams they belong to or lead).
+ * - agent: Handle only tickets assigned to them or tickets in their teams (Mine / Team views). Team directory (read-only,
+ *   team-scoped). No company/inbox/template admin.
+ * - viewer: Read-only — view tickets, customers, dashboard. No replies, no edits; limited settings (company/inboxes).
  */
 export const ROLES = ['admin', 'manager', 'agent', 'viewer'] as const;
 export type Role = (typeof ROLES)[number];
@@ -18,8 +20,8 @@ export const ROLE_LABELS: Record<Role, string> = {
 
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
   admin: 'Full tilgang: innstillinger, brukere, maler og alle saker.',
-  manager: 'Leder for team: se alle saker i teamet, håndtere status for teammedlemmer.',
-  agent: 'Kan håndtere saker, svare kunder og bruke maler.',
+  manager: 'Leder: se alle saker, team på dashbord, og teammedlemmer i egne team under Innstillinger.',
+  agent: 'Ser kun egne saker og saker i egne team. Kan svare kunder og bruke maler. Teamliste er skrivebeskyttet.',
   viewer: 'Kun lesing: se saker og kunder.',
 };
 
@@ -31,19 +33,31 @@ export function isManager(role: Role | null | undefined): boolean {
   return role === 'manager';
 }
 
+export function isAgent(role: Role | null | undefined): boolean {
+  return role === 'agent';
+}
+
 /** Admin and manager can see the Brukere (team status) list on the dashboard. */
 export function canSeeTeamStatusDashboard(role: Role | null | undefined): boolean {
   return role === 'admin' || role === 'manager';
 }
 
-/** Admin and manager can access the Analyse (analytics) page. */
+/**
+ * Legacy helper: default analytics visibility matched admin + manager.
+ * Prefer `canAccessModule('analytics', …)` from `types/modules` with Innstillinger → Moduler.
+ */
 export function canAccessAnalytics(role: Role | null | undefined): boolean {
   return role === 'admin' || role === 'manager';
 }
 
-/** Admin and viewer can open Settings; agents have no access. Company tab for both; Users/Templates etc. admin only. */
+/** Settings: admin (all), viewer (company/innbokser), manager (company/innbokser + teamkatalog), agent (teamkatalog only). */
 export function canAccessSettings(role: Role | null | undefined): boolean {
-  return role === 'admin' || role === 'viewer';
+  return role === 'admin' || role === 'viewer' || role === 'manager' || role === 'agent';
+}
+
+/** Managers and agents see Brukere as a read-only, team-scoped directory (not full user admin). */
+export function canViewTeamDirectory(role: Role | null | undefined): boolean {
+  return role === 'manager' || role === 'agent';
 }
 
 export function canManageUsers(role: Role | null | undefined): boolean {

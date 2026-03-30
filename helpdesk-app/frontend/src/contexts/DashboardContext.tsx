@@ -27,6 +27,10 @@ import {
 } from 'date-fns';
 import { sortByAvailabilityStatus } from '../types/availability';
 import type { Ticket as TicketType } from '../types/ticket';
+import {
+  fetchDashboardScopedTeamIds,
+  ticketsOrFilterForDashboardRole,
+} from '../utils/dashboardTicketScope';
 
 export interface PlanningSlotOnDashboard {
   id: string;
@@ -131,6 +135,8 @@ function getEmptyRangesForDay(
 const DAY_LABELS: Record<number, string> = { 0: 'Søn', 1: 'Man', 2: 'Tir', 3: 'Ons', 4: 'Tor', 5: 'Fre', 6: 'Lør' };
 
 export interface DashboardState {
+  /** Full tenant vs team + assigned (agent/manager). */
+  ticketMetricsScope: 'tenant' | 'team';
   statusCounts: Record<string, number>;
   mine: number;
   unassigned: number;
@@ -149,6 +155,7 @@ export interface DashboardState {
 }
 
 const initialDashboardState: DashboardState = {
+  ticketMetricsScope: 'tenant',
   statusCounts: {},
   mine: 0,
   unassigned: 0,
@@ -190,24 +197,129 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
     }
     setLoading(true);
     try {
-      const [ticketsRes, membersRes] = await Promise.all([
-        supabase
+      const teamIds = await fetchDashboardScopedTeamIds(supabase, currentTenantId, user?.id ?? null);
+      const orFilter = ticketsOrFilterForDashboardRole(role, user?.id, teamIds);
+      const ticketMetricsScope: 'tenant' | 'team' =
+        role === 'admin' || role === 'viewer' ? 'tenant' : 'team';
+
+      const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
+      const weekEnd = endOfWeek(new Date(), { weekStartsOn: 1 });
+      const thirtyDaysAgo = subDays(new Date(), 30);
+
+      let weekQ = supabase
+        .from('tickets')
+        .select('id, created_at')
+        .eq('tenant_id', currentTenantId)
+        .neq('status', 'archived')
+        .gte('created_at', weekStart.toISOString())
+        .lte('created_at', weekEnd.toISOString());
+      if (orFilter) weekQ = weekQ.or(orFilter);
+
+      let openedQ = supabase
+        .from('tickets')
+        .select('created_at')
+        .eq('tenant_id', currentTenantId)
+        .neq('status', 'archived')
+        .gte('created_at', thirtyDaysAgo.toISOString());
+      if (orFilter) openedQ = openedQ.or(orFilter);
+
+      let closedQ = supabase
+        .from('tickets')
+        .select('resolved_at')
+        .eq('tenant_id', currentTenantId)
+        .neq('status', 'archived')
+        .not('resolved_at', 'is', null)
+        .gte('resolved_at', thirtyDaysAgo.toISOString());
+      if (orFilter) closedQ = closedQ.or(orFilter);
+
+      const minePromise =
+        user?.id != null
+          ? supabase
+              .from('tickets')
+              .select('id', { count: 'exact', head: true })
+              .eq('tenant_id', currentTenantId)
+              .neq('status', 'archived')
+              .eq('assigned_to', user.id)
+          : Promise.resolve({ count: 0, error: null });
+
+      let unassignedQ = supabase
+        .from('tickets')
+        .select('id', { count: 'exact', head: true })
+        .eq('tenant_id', currentTenantId)
+        .neq('status', 'archived')
+        .is('assigned_to', null);
+      if (orFilter) {
+        if (teamIds.length > 0) unassignedQ = unassignedQ.in('team_id', teamIds);
+        else unassignedQ = unassignedQ.eq('id', '00000000-0000-0000-0000-000000000000');
+      }
+
+      const recentMinePromise =
+        user?.id != null
+          ? supabase
+              .from('tickets')
+              .select('*, customer:customers(email, name)')
+              .eq('tenant_id', currentTenantId)
+              .neq('status', 'archived')
+              .eq('assigned_to', user.id)
+              .order('updated_at', { ascending: false })
+              .limit(8)
+          : Promise.resolve({ data: [], error: null });
+
+      let recentUnassignedQ = supabase
+        .from('tickets')
+        .select('*, customer:customers(email, name)')
+        .eq('tenant_id', currentTenantId)
+        .neq('status', 'archived')
+        .is('assigned_to', null)
+        .order('updated_at', { ascending: false })
+        .limit(8);
+      if (orFilter) {
+        if (teamIds.length > 0) recentUnassignedQ = recentUnassignedQ.in('team_id', teamIds);
+        else recentUnassignedQ = recentUnassignedQ.eq('id', '00000000-0000-0000-0000-000000000000');
+      }
+
+      const statusCountPromises = statuses.map((s) => {
+        let q = supabase
           .from('tickets')
-          .select('*, customer:customers(email, name)')
+          .select('id', { count: 'exact', head: true })
           .eq('tenant_id', currentTenantId)
-          .neq('status', 'archived')
-          .order('updated_at', { ascending: false })
-          .limit(100),
+          .eq('status', s.code);
+        if (orFilter) q = q.or(orFilter);
+        return q.then((res) => ({ code: s.code, count: res.count ?? 0 }));
+      });
+
+      const [
+        membersRes,
+        weekTicketsRes,
+        openedRes,
+        closedRes,
+        mineRes,
+        unassignedRes,
+        recentMineRes,
+        recentUnassignedRes,
+        ...statusCountResults
+      ] = await Promise.all([
         supabase
           .from('team_members')
           .select('id, name, email, user_id, is_active, availability_status, last_seen_at')
           .eq('tenant_id', currentTenantId),
+        weekQ,
+        openedQ,
+        closedQ,
+        minePromise,
+        unassignedQ,
+        recentMinePromise,
+        recentUnassignedQ,
+        ...statusCountPromises,
       ]);
-      const list = (ticketsRes.data ?? []) as TicketType[];
+
       const byStatus: Record<string, number> = {};
-      statuses.forEach((s) => {
-        byStatus[s.code] = list.filter((t) => t.status === s.code).length;
+      statusCountResults.forEach((row) => {
+        if (row && typeof row === 'object' && 'code' in row) {
+          byStatus[(row as { code: string }).code] = (row as { count: number }).count;
+        }
       });
+
       let members: TeamMemberForList[] = [];
       if (membersRes.error) {
         const fallback = await supabase
@@ -226,21 +338,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         members.map((m) => ({ ...m, availability_status: getDisplayStatus(m) }))
       ) as TeamMemberForList[];
 
-      const weekStart = startOfWeek(new Date(), { weekStartsOn: 1 });
-      const weekEnd = endOfWeek(new Date(), { weekStartsOn: 1 });
       const days = eachDayOfInterval({ start: weekStart, end: weekEnd });
-      const { data: weekTickets } = await supabase
-        .from('tickets')
-        .select('id, created_at')
-        .eq('tenant_id', currentTenantId)
-        .neq('status', 'archived')
-        .gte('created_at', weekStart.toISOString())
-        .lte('created_at', weekEnd.toISOString());
       const byDay: Record<string, number> = {};
       days.forEach((d) => {
         byDay[format(d, 'yyyy-MM-dd')] = 0;
       });
-      (weekTickets ?? []).forEach((t: { id: string; created_at: string }) => {
+      (weekTicketsRes.data ?? []).forEach((t: { id: string; created_at: string }) => {
         const key = format(new Date(t.created_at), 'yyyy-MM-dd');
         if (byDay[key] !== undefined) byDay[key]++;
       });
@@ -250,23 +353,7 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
         count: byDay[format(d, 'yyyy-MM-dd')] ?? 0,
       }));
 
-      const thirtyDaysAgo = subDays(new Date(), 30);
       const monthDays = eachDayOfInterval({ start: thirtyDaysAgo, end: new Date() });
-      const [openedRes, closedRes] = await Promise.all([
-        supabase
-          .from('tickets')
-          .select('created_at')
-          .eq('tenant_id', currentTenantId)
-          .neq('status', 'archived')
-          .gte('created_at', thirtyDaysAgo.toISOString()),
-        supabase
-          .from('tickets')
-          .select('resolved_at')
-          .eq('tenant_id', currentTenantId)
-          .neq('status', 'archived')
-          .not('resolved_at', 'is', null)
-          .gte('resolved_at', thirtyDaysAgo.toISOString()),
-      ]);
       const openedByDate: Record<string, number> = {};
       const closedByDate: Record<string, number> = {};
       monthDays.forEach((d) => {
@@ -382,11 +469,12 @@ export function DashboardProvider({ children }: { children: ReactNode }) {
       }
 
       setState({
+        ticketMetricsScope,
         statusCounts: byStatus,
-        mine: user ? list.filter((t) => t.assigned_to === user.id).length : 0,
-        unassigned: list.filter((t) => !t.assigned_to).length,
-        recentMine: user ? list.filter((t) => t.assigned_to === user.id).slice(0, 8) : [],
-        recentUnassigned: list.filter((t) => !t.assigned_to).slice(0, 8),
+        mine: mineRes.count ?? 0,
+        unassigned: unassignedRes.count ?? 0,
+        recentMine: (recentMineRes.data ?? []) as TicketType[],
+        recentUnassigned: (recentUnassignedRes.data ?? []) as TicketType[],
         teamMembers,
         weekOpenedByDay,
         monthTrend,

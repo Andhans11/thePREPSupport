@@ -6,6 +6,7 @@
 DROP POLICY IF EXISTS "Team members can update team_members" ON team_members;
 
 -- 2. Non-admin members can update their own row only
+DROP POLICY IF EXISTS "Team members can update own profile" ON team_members;
 CREATE POLICY "Team members can update own profile"
   ON team_members FOR UPDATE TO authenticated
   USING (
@@ -14,6 +15,7 @@ CREATE POLICY "Team members can update own profile"
   );
 
 -- 3. Admins can update any team member in their tenant
+DROP POLICY IF EXISTS "Admins can update any team member" ON team_members;
 CREATE POLICY "Admins can update any team member"
   ON team_members FOR UPDATE TO authenticated
   USING (

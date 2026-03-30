@@ -15,24 +15,54 @@ import {
   X,
 } from 'lucide-react';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
-import { canAccessSettings, canAccessAnalytics, canAccessTimeRegistration } from '../../types/roles';
+import { canAccessSettings, canAccessTimeRegistration } from '../../types/roles';
+import { canAccessModule } from '../../types/modules';
 import { useTenant } from '../../contexts/TenantContext';
+import { useModules } from '../../contexts/ModulesContext';
 import { supabase } from '../../services/supabase';
-
-const MAIN_NAV_ITEMS = [
-  { to: '/', label: 'Dashbord', icon: LayoutDashboard, show: () => true },
-  { to: '/tickets', label: 'Saker', icon: Ticket, show: () => true },
-  { to: '/planning', label: 'Planlegging', icon: Calendar, show: () => true },
-  { to: '/timeregistrering', label: 'Timeregistrering', icon: Clock, show: canAccessTimeRegistration },
-  { to: '/customers', label: 'Kunder', icon: Users, show: () => true },
-  { to: '/analytics', label: 'Analyse', icon: BarChart3, show: canAccessAnalytics },
-] as const;
 
 export function Sidebar() {
   const location = useLocation();
   const { role } = useCurrentUserRole();
+  const {
+    planningEnabled,
+    timeRegistrationEnabled,
+    calendarEnabled,
+    analyticsEnabled,
+    roleAccess,
+  } = useModules();
   const showSettings = canAccessSettings(role);
-  const mainNav = MAIN_NAV_ITEMS.filter((item) => item.show(role));
+  const mainNav = [
+    { to: '/', label: 'Dashbord', icon: LayoutDashboard, show: () => true },
+    { to: '/tickets', label: 'Saker', icon: Ticket, show: () => true },
+    {
+      to: '/planning',
+      label: 'Planlegging',
+      icon: Calendar,
+      show: () => canAccessModule('planning', planningEnabled, roleAccess.planning, role),
+    },
+    {
+      to: '/timeregistrering',
+      label: 'Timeregistrering',
+      icon: Clock,
+      show: () =>
+        canAccessModule('time_registration', timeRegistrationEnabled, roleAccess.time_registration, role) &&
+        canAccessTimeRegistration(role),
+    },
+    {
+      to: '/kalender',
+      label: 'Kalender',
+      icon: Calendar,
+      show: () => canAccessModule('calendar', calendarEnabled, roleAccess.calendar, role),
+    },
+    { to: '/customers', label: 'Kunder', icon: Users, show: () => true },
+    {
+      to: '/analytics',
+      label: 'Analyse',
+      icon: BarChart3,
+      show: () => canAccessModule('analytics', analyticsEnabled, roleAccess.analytics, role),
+    },
+  ].filter((item) => item.show());
   const { tenants, currentTenantId, setCurrentTenantId, loading: tenantLoading } = useTenant();
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
   const [tenantOpen, setTenantOpen] = useState(false);

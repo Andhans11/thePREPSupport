@@ -11,17 +11,21 @@ function normalizePathForCache(p: string): string {
   return String(p).trim().replace(/^\/+|\/+$/g, '');
 }
 
-/** Refresh session, then call an Edge Function. Returns { token } or { error }. */
+/** Get access token for Edge Function calls. Prefer existing session; fallback to refresh. */
 async function getTokenAfterRefresh(): Promise<{ token: string } | { error: string }> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const existingToken = sessionData.session?.access_token;
+  if (existingToken) return { token: existingToken };
+
   const { data, error: refreshError } = await supabase.auth.refreshSession();
-  const token = data.session?.access_token;
-  if (refreshError || !token) {
-    return { error: 'Ikke innlogget' };
+  const refreshedToken = data.session?.access_token;
+  if (refreshError || !refreshedToken) {
+    return { error: refreshError?.message || 'Ikke innlogget' };
   }
-  return { token };
+  return { token: refreshedToken };
 }
 
-/** Call a Supabase Edge Function with auth. Refreshes session and uses Bearer token. */
+/** Call a Supabase Edge Function with auth and timeout. */
 async function callEdgeFunction<TBody = unknown, TJson = Record<string, unknown>>(
   name: string,
   body: TBody
@@ -29,15 +33,28 @@ async function callEdgeFunction<TBody = unknown, TJson = Record<string, unknown>
   const auth = await getTokenAfterRefresh();
   if ('error' in auth) return { ok: false, error: auth.error };
   const url = `${getSupabaseUrl()}/functions/v1/${name}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${auth.token}`,
-      apikey: getSupabaseAnonKey(),
-    },
-    body: JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15000);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${auth.token}`,
+        apikey: getSupabaseAnonKey(),
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    clearTimeout(timeout);
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return { ok: false, error: 'Forespørselen tok for lang tid. Prøv igjen.' };
+    }
+    return { ok: false, error: 'Nettverksfeil ved kall til server.' };
+  }
+  clearTimeout(timeout);
   const json = (await res.json().catch(() => ({}))) as TJson & { error?: string; message?: string };
   if (!res.ok) {
     const msg = json.error ?? json.message ?? res.statusText;
@@ -58,6 +75,30 @@ export async function exchangeOAuthCodeForTokens(
   });
   if (!result.ok) return { success: false, error: result.error };
   return { success: true };
+}
+
+export async function exchangeGoogleCalendarOAuthCodeForTokens(
+  code: string,
+  tenantId?: string,
+  /** Must match the redirect_uri used in the Google authorize URL (and be allow-listed on the Edge Function). */
+  redirectUri?: string
+): Promise<{ success: boolean; error?: string }> {
+  const result = await callEdgeFunction('oauth-google-calendar-callback', {
+    code,
+    tenant_id: tenantId ?? null,
+    redirect_uri: redirectUri ?? null,
+  });
+  if (!result.ok) return { success: false, error: result.error };
+  return { success: true };
+}
+
+export async function triggerGoogleCalendarSync(tenantId?: string): Promise<{ success: boolean; synced?: number; error?: string }> {
+  const result = await callEdgeFunction<{ tenant_id: string | null }, { synced?: number }>(
+    'sync-google-calendar-events',
+    { tenant_id: tenantId ?? null }
+  );
+  if (!result.ok) return { success: false, error: result.error };
+  return { success: true, synced: typeof result.json.synced === 'number' ? result.json.synced : 0 };
 }
 
 export async function triggerGmailSync(tenantId?: string): Promise<{ success: boolean; created?: number; error?: string }> {

@@ -21,3 +21,9 @@ verify_jwt = false
 
 [functions.send-invitation-email]
 verify_jwt = false
+
+[functions.oauth-google-calendar-callback]
+verify_jwt = false
+
+[functions.sync-google-calendar-events]
+verify_jwt = false

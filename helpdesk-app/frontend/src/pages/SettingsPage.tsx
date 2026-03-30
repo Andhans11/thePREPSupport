@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useCurrentUserRole } from '../hooks/useCurrentUserRole';
 import { SettingsTabs, useSettingsTab } from '../components/settings/SettingsTabs';
 import { CompanySettings } from '../components/settings/CompanySettings';
@@ -9,12 +11,22 @@ import { BusinessHoursSettings } from '../components/settings/BusinessHoursSetti
 import { SignaturesSettings } from '../components/settings/SignaturesSettings';
 import { MasterDataSettings } from '../components/settings/MasterDataSettings';
 import { TimeRegistrationSettings } from '../components/settings/TimeRegistrationSettings';
+import { ModulesSettings } from '../components/settings/ModulesSettings';
 import { canAccessSettings } from '../types/roles';
 import { Navigate } from 'react-router-dom';
 
 export function SettingsPage() {
   const { role, loading } = useCurrentUserRole();
-  const tab = useSettingsTab();
+  const tab = useSettingsTab(role);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabRequested = searchParams.get('tab');
+
+  useEffect(() => {
+    if (!role) return;
+    if (tabRequested !== tab) {
+      setSearchParams({ tab }, { replace: true });
+    }
+  }, [role, tab, tabRequested, setSearchParams]);
 
   if (loading) {
     return (
@@ -44,6 +56,7 @@ export function SettingsPage() {
       <SettingsTabs currentRole={role}>
         {tab === 'company' && <CompanySettings />}
         {tab === 'inboxes' && <EmailInboxesSettings />}
+        {tab === 'modules' && <ModulesSettings />}
         {tab === 'users' && <UsersSettings />}
         {tab === 'teams' && <TeamsSettings />}
         {tab === 'templates' && <TemplatesSettings />}

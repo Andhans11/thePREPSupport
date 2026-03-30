@@ -6,6 +6,7 @@ import { notifyNewTicket } from '../services/api';
 import { GMAIL_SYNC_COMPLETED_EVENT } from './GmailContext';
 import { useAuth } from './AuthContext';
 import { useTenant } from './TenantContext';
+import { useCurrentUserRole } from '../hooks/useCurrentUserRole';
 
 export type AssignmentView = 'all' | 'mine' | 'unassigned' | 'team' | 'archived' | 'closed';
 
@@ -55,6 +56,7 @@ const TicketContext = createContext<TicketContextValue | null>(null);
 export function TicketProvider({ children }: { children: React.ReactNode }) {
   const { user } = useAuth();
   const { currentTenantId } = useTenant();
+  const { role: memberRole } = useCurrentUserRole();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -116,17 +118,31 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
         setViewCounts({ all: 0, mine: 0, unassigned: 0, team: 0, archived: 0, closed: 0 });
         return;
       }
-      const base = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).neq('status', 'archived').neq('status', 'closed');
-      const unassignedQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).is('assigned_to', null).neq('status', 'archived').neq('status', 'closed');
       const mineQ = userId ? supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).eq('assigned_to', userId).neq('status', 'archived').neq('status', 'closed') : Promise.resolve({ count: 0 });
-      const archivedQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).eq('status', 'archived');
-      const closedQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).eq('status', 'closed');
       const [memberTeamIds, managedTeamIds] = await Promise.all([getMyTeamIds(userId), getManagedTeamIds(userId)]);
       const teamIds = [...new Set([...memberTeamIds, ...managedTeamIds])];
       const teamQ =
         teamIds.length > 0
           ? supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).in('team_id', teamIds).neq('status', 'archived').neq('status', 'closed')
           : Promise.resolve({ count: 0 });
+
+      if (memberRole === 'agent') {
+        const [teamRes, mineRes] = await Promise.all([teamQ, mineQ]);
+        setViewCounts({
+          all: 0,
+          unassigned: 0,
+          team: teamRes.count ?? 0,
+          mine: mineRes.count ?? 0,
+          archived: 0,
+          closed: 0,
+        });
+        return;
+      }
+
+      const base = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).neq('status', 'archived').neq('status', 'closed');
+      const unassignedQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).is('assigned_to', null).neq('status', 'archived').neq('status', 'closed');
+      const archivedQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).eq('status', 'archived');
+      const closedQ = supabase.from('tickets').select('id', { count: 'exact', head: true }).eq('tenant_id', currentTenantId).eq('status', 'closed');
 
       const [allRes, unassignedRes, teamRes, mineRes, archivedRes, closedRes] = await Promise.all([base, unassignedQ, teamQ, mineQ, archivedQ, closedQ]);
       setViewCounts({
@@ -138,7 +154,7 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
         closed: closedRes.count ?? 0,
       });
     },
-    [currentTenantId, getMyTeamIds, getManagedTeamIds]
+    [currentTenantId, getMyTeamIds, getManagedTeamIds, memberRole]
   );
 
   const fetchTickets = useCallback(
@@ -169,7 +185,12 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       }
       setError(null);
       const last = lastFiltersRef.current;
-      const view = filters?.assignmentView ?? assignmentView;
+      let view = filters?.assignmentView ?? assignmentView;
+      if (memberRole === 'agent') {
+        if (view === 'all' || view === 'unassigned' || view === 'closed' || view === 'archived') {
+          view = 'mine';
+        }
+      }
       const uid = filters?.userId ?? user?.id ?? null;
       const status = filters && 'status' in filters ? filters.status : (last?.status);
       const search = filters?.search?.trim() || undefined;
@@ -319,7 +340,7 @@ export function TicketProvider({ children }: { children: React.ReactNode }) {
       setLoadingMore(false);
       fetchViewCounts(uid);
     },
-    [assignmentView, currentTenantId, fetchViewCounts, getMyTeamIds, getManagedTeamIds, user?.id]
+    [assignmentView, currentTenantId, fetchViewCounts, getMyTeamIds, getManagedTeamIds, user?.id, memberRole]
   );
 
   const loadMoreTickets = useCallback(async () => {

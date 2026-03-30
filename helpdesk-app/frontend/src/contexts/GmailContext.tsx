@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { supabase } from '../services/supabase';
 import { getGmailAuthUrl } from '../services/gmail';
-import { exchangeOAuthCodeForTokens, triggerGmailSync, disconnectGmail } from '../services/api';
+import { exchangeOAuthCodeForTokens, triggerGmailSync, disconnectGmail, triggerGoogleCalendarSync } from '../services/api';
 import { useTenant } from './TenantContext';
 import { useToast } from './ToastContext';
 
@@ -200,6 +200,8 @@ export function GmailProvider({ children }: { children: React.ReactNode }) {
     await fetchGmailSync();
     const created = result.created ?? 0;
     setLastSyncNewTicketsCount(created);
+    // Keep calendar data fresh when user manually syncs inbox.
+    await triggerGoogleCalendarSync(currentTenantId ?? undefined);
     if (currentTenantId && typeof window !== 'undefined') {
       try {
         localStorage.setItem(

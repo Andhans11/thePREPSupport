@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
-import { useGmail } from '../../contexts/GmailContext';
+import { useUnifiedSync } from '../../hooks/useUnifiedSync';
 import { useTickets } from '../../contexts/TicketContext';
 import { useTenant } from '../../contexts/TenantContext';
 import { useCurrentUserRole } from '../../hooks/useCurrentUserRole';
@@ -10,6 +10,8 @@ import { supabase } from '../../services/supabase';
 import { formatDateTime } from '../../utils/formatters';
 import { getNotificationIcon } from '../../utils/notificationIcons';
 import { isAdmin, canAccessSettings } from '../../types/roles';
+import { canAccessModule } from '../../types/modules';
+import { useModules } from '../../contexts/ModulesContext';
 import { AVAILABILITY_LABELS, AVAILABILITY_COLORS, type AvailabilityStatus } from '../../types/availability';
 import {
   LogOut,
@@ -94,8 +96,13 @@ export function Header() {
   const notifRef = useRef<HTMLDivElement>(null);
 
   const { role, availableForEmail, setAvailableForEmail, availabilityStatus, setAvailabilityStatus, teamMemberId } = useCurrentUserRole();
-  const { lastSyncAt, lastSyncNewTicketsCount, syncNow, syncing } = useGmail();
+  const { planningEnabled, roleAccess } = useModules();
+  const showPlanningInMenu = canAccessModule('planning', planningEnabled, roleAccess.planning, role);
   const { fetchTickets } = useTickets();
+  const { combinedLastSyncAt, lastSyncNewTicketsCount, syncAll, combinedSyncing, gmailConnected, calendarConnected } =
+    useUnifiedSync(() => {
+      fetchTickets();
+    });
   const { items: notifications, unreadCount, markAsRead, markAllAsRead } = useNotifications({ unreadOnly: true });
   const admin = isAdmin(role);
   const [notifPrefs, setNotifPrefs] = useState({
@@ -205,19 +212,22 @@ export function Header() {
       <button
         type="button"
         onClick={async () => {
-          const result = await syncNow();
-          if (result?.success) fetchTickets();
+          await syncAll();
         }}
-        disabled={syncing}
+        disabled={combinedSyncing || (!gmailConnected && !calendarConnected)}
         className="flex items-center gap-2 min-w-0 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--hiver-bg)] transition-colors disabled:opacity-70 disabled:cursor-wait"
-        title="Synkroniser e-post på nytt"
+        title="Synkroniser e-post og kalender (samme som bakgrunnssynk ca. hvert 15. min)"
       >
-        <RefreshCw className={`w-4 h-4 text-[var(--hiver-text-muted)] shrink-0 ${syncing ? 'animate-spin' : ''}`} aria-hidden />
-        <span className="text-xs text-[var(--hiver-text-muted)] truncate" title={lastSyncAt ? formatDateTime(lastSyncAt) : undefined}>
-          {syncing
+        <RefreshCw className={`w-4 h-4 text-[var(--hiver-text-muted)] shrink-0 ${combinedSyncing ? 'animate-spin' : ''}`} aria-hidden />
+        <span className="text-xs text-[var(--hiver-text-muted)] truncate" title={combinedLastSyncAt ? formatDateTime(combinedLastSyncAt) : undefined}>
+          {combinedSyncing
             ? 'Synkroniserer…'
-            : lastSyncAt
-              ? `Sist hentet: ${formatDateTime(lastSyncAt)}${lastSyncNewTicketsCount != null ? ` · ${lastSyncNewTicketsCount} nye sak${lastSyncNewTicketsCount === 1 ? '' : 'er'}` : ''}`
+            : combinedLastSyncAt
+              ? `Sist synkronisert: ${formatDateTime(combinedLastSyncAt)}${
+                  gmailConnected && lastSyncNewTicketsCount != null
+                    ? ` · ${lastSyncNewTicketsCount} nye sak${lastSyncNewTicketsCount === 1 ? '' : 'er'}`
+                    : ''
+                }`
               : 'Ingen sync ennå'}
         </span>
       </button>
@@ -465,17 +475,19 @@ export function Header() {
               </label>
             </div>
             <div className="py-1">
-              <Link
-                to="/planning"
-                onClick={() => setUserOpen(false)}
-                className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]"
-              >
-                <span className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-[var(--hiver-text-muted)]" />
-                  Teamtilgjengelighet
-                </span>
-                <ChevronRight className="w-4 h-4 text-[var(--hiver-text-muted)]" />
-              </Link>
+              {showPlanningInMenu && (
+                <Link
+                  to="/planning"
+                  onClick={() => setUserOpen(false)}
+                  className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm text-[var(--hiver-text)] hover:bg-[var(--hiver-bg)]"
+                >
+                  <span className="flex items-center gap-2">
+                    <Users className="w-4 h-4 text-[var(--hiver-text-muted)]" />
+                    Teamtilgjengelighet
+                  </span>
+                  <ChevronRight className="w-4 h-4 text-[var(--hiver-text-muted)]" />
+                </Link>
+              )}
               {admin && (
                 <Link
                   to="/settings?tab=users"
@@ -489,6 +501,7 @@ export function Header() {
                   <ChevronRight className="w-4 h-4 text-[var(--hiver-text-muted)]" />
                 </Link>
               )}
+            </div>
               {canAccessSettings(role) && (
                 <Link
                   to="/settings"
@@ -513,7 +526,6 @@ export function Header() {
                 <LogOut className="w-4 h-4" />
                 Logg ut
               </button>
-            </div>
           </div>
         )}
       </div>

@@ -4,6 +4,8 @@ import { TenantProvider } from './contexts/TenantContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { TicketProvider } from './contexts/TicketContext';
 import { GmailProvider } from './contexts/GmailContext';
+import { ModulesProvider } from './contexts/ModulesContext';
+import { GoogleCalendarProvider } from './contexts/GoogleCalendarContext';
 import { MasterDataProvider } from './contexts/MasterDataContext';
 import { DashboardProvider } from './contexts/DashboardContext';
 import { Layout } from './components/layout/Layout';
@@ -21,11 +23,14 @@ import { CustomerDetailPage } from './pages/CustomerDetailPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { PlanningPage } from './pages/PlanningPage';
 import { TimeRegistrationPage } from './pages/TimeRegistrationPage';
+import { CalendarPage } from './pages/CalendarPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AddEmailInboxPage } from './pages/AddEmailInboxPage';
+import { AddCalendarPage } from './pages/AddCalendarPage';
 import { NotificationsPage } from './pages/NotificationsPage';
 import { useCurrentUserRole } from './hooks/useCurrentUserRole';
-import { canAccessAnalytics } from './types/roles';
+import { useModules } from './contexts/ModulesContext';
+import { canAccessModule } from './types/modules';
 
 function HomeOrLanding() {
   const { user, loading } = useAuth();
@@ -43,10 +48,43 @@ function HomeOrLanding() {
 }
 
 function AnalyticsGuard() {
-  const { role, loading } = useCurrentUserRole();
-  if (loading) return null;
-  if (!canAccessAnalytics(role)) return <Navigate to="/" replace />;
+  const { role, loading: roleLoading } = useCurrentUserRole();
+  const { loading, analyticsEnabled, roleAccess } = useModules();
+  if (loading || roleLoading) return null;
+  if (!canAccessModule('analytics', analyticsEnabled, roleAccess.analytics, role)) {
+    return <Navigate to="/" replace />;
+  }
   return <AnalyticsPage />;
+}
+
+function PlanningGuard() {
+  const { role, loading: roleLoading } = useCurrentUserRole();
+  const { loading, planningEnabled, roleAccess } = useModules();
+  if (loading || roleLoading) return null;
+  if (!canAccessModule('planning', planningEnabled, roleAccess.planning, role)) {
+    return <Navigate to="/" replace />;
+  }
+  return <PlanningPage />;
+}
+
+function TimeRegistrationGuard() {
+  const { role, loading: roleLoading } = useCurrentUserRole();
+  const { loading, timeRegistrationEnabled, roleAccess } = useModules();
+  if (loading || roleLoading) return null;
+  if (!canAccessModule('time_registration', timeRegistrationEnabled, roleAccess.time_registration, role)) {
+    return <Navigate to="/" replace />;
+  }
+  return <TimeRegistrationPage />;
+}
+
+function CalendarGuard() {
+  const { role, loading: roleLoading } = useCurrentUserRole();
+  const { loading, calendarEnabled, roleAccess } = useModules();
+  if (loading || roleLoading) return null;
+  if (!canAccessModule('calendar', calendarEnabled, roleAccess.calendar, role)) {
+    return <Navigate to="/" replace />;
+  }
+  return <CalendarPage />;
 }
 
 function AppRoutes() {
@@ -58,17 +96,20 @@ function AppRoutes() {
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/accept-invite" element={<AcceptInvitePage />} />
       <Route path="/oauth/callback" element={<OAuthCallbackPage />} />
+      <Route path="/oauth/callback/calendar" element={<OAuthCallbackPage />} />
       <Route path="/" element={<HomeOrLanding />}>
         <Route index element={<DashboardPage />} />
         <Route path="tickets" element={<TicketsPage />} />
         <Route path="customers" element={<CustomersPage />} />
         <Route path="customers/:id" element={<CustomerDetailPage />} />
         <Route path="analytics" element={<AnalyticsGuard />} />
-        <Route path="planning" element={<PlanningPage />} />
-        <Route path="timeregistrering" element={<TimeRegistrationPage />} />
+        <Route path="planning" element={<PlanningGuard />} />
+        <Route path="timeregistrering" element={<TimeRegistrationGuard />} />
+        <Route path="kalender" element={<CalendarGuard />} />
         <Route path="notifications" element={<NotificationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/inboxes/new" element={<AddEmailInboxPage />} />
+        <Route path="settings/calendar/new" element={<AddCalendarPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -82,13 +123,17 @@ export default function App() {
         <TenantProvider>
           <ToastProvider>
             <GmailProvider>
-              <MasterDataProvider>
-                <DashboardProvider>
-                  <TicketProvider>
-                    <AppRoutes />
-                  </TicketProvider>
-                </DashboardProvider>
-              </MasterDataProvider>
+              <ModulesProvider>
+                <GoogleCalendarProvider>
+                  <MasterDataProvider>
+                    <DashboardProvider>
+                      <TicketProvider>
+                        <AppRoutes />
+                      </TicketProvider>
+                    </DashboardProvider>
+                  </MasterDataProvider>
+                </GoogleCalendarProvider>
+              </ModulesProvider>
             </GmailProvider>
           </ToastProvider>
         </TenantProvider>

@@ -1,17 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useGmail } from '../contexts/GmailContext';
+import { useGoogleCalendar } from '../contexts/GoogleCalendarContext';
 import { useTenant } from '../contexts/TenantContext';
+import { oauthExchangeOnce } from '../services/oauthExchangeOnce';
 import { supabase } from '../services/supabase';
 
 export function OAuthCallbackPage() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { handleOAuthCallback } = useGmail();
+  const { handleOAuthCallback: handleCalendarOAuthCallback } = useGoogleCalendar();
   const { setCurrentTenantId } = useTenant();
   const [status, setStatus] = useState<'pending' | 'success' | 'error'>('pending');
   const [message, setMessage] = useState('');
-  const hasStartedRef = useRef(false);
+  const gmailHandlerRef = useRef(handleOAuthCallback);
+  const calendarHandlerRef = useRef(handleCalendarOAuthCallback);
+  gmailHandlerRef.current = handleOAuthCallback;
+  calendarHandlerRef.current = handleCalendarOAuthCallback;
 
   useEffect(() => {
     const code = searchParams.get('code');
@@ -30,21 +36,27 @@ export function OAuthCallbackPage() {
       return;
     }
 
-    // Run only once per page load so we don't flood the API (avoids 401 spam from re-runs).
-    if (hasStartedRef.current) return;
-    hasStartedRef.current = true;
+    setStatus('pending');
+    setMessage('');
 
+    const calendarStateMatch = typeof state === 'string' ? /^calendar:([a-f0-9-]{36})/i.exec(state) : null;
+    const isCalendarState = !!calendarStateMatch;
+    const calendarTenantIdFromState = calendarStateMatch?.[1] ?? null;
     const tenantIdFromState = state && /^[a-f0-9-]{36}$/i.test(state) ? state : null;
     const groupEmail =
       typeof window !== 'undefined' ? window.sessionStorage.getItem('helpdesk_gmail_connect_group_email') : null;
 
     let cancelled = false;
+    const watchdog = setTimeout(() => {
+      if (cancelled) return;
+      setStatus('error');
+      setMessage('Tilkoblingen tok for lang tid. Prøv igjen.');
+    }, 25000);
 
     const runExchange = async () => {
       // After redirect from Google, session may not be restored yet. Wait briefly for it.
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.access_token) {
-        // Give auth state a moment to hydrate (e.g. from localStorage), then retry once
         await new Promise((r) => setTimeout(r, 300));
         const { data: { session: retrySession } } = await supabase.auth.getSession();
         if (!retrySession?.access_token) {
@@ -55,20 +67,40 @@ export function OAuthCallbackPage() {
         }
       }
 
-      handleOAuthCallback(code, tenantIdFromState, groupEmail)
+      const exchangePromise = oauthExchangeOnce(code, () =>
+        isCalendarState
+          ? calendarHandlerRef.current(code, calendarTenantIdFromState)
+          : gmailHandlerRef.current(code, tenantIdFromState, groupEmail)
+      );
+
+      const withTimeout = Promise.race([
+        exchangePromise,
+        new Promise<{ ok: false; error: string }>((resolve) =>
+          setTimeout(() => resolve({ ok: false, error: 'Tilkoblingen tok for lang tid. Prøv igjen.' }), 20000)
+        ),
+      ]);
+      withTimeout
         .then((result) => {
+          clearTimeout(watchdog);
           if (cancelled) return;
           if (result.ok) {
             if (tenantIdFromState) setCurrentTenantId(tenantIdFromState);
+            if (calendarTenantIdFromState && /^[a-f0-9-]{36}$/i.test(calendarTenantIdFromState)) {
+              setCurrentTenantId(calendarTenantIdFromState);
+            }
             setStatus('success');
-            setMessage('Gmail er koblet til. Omdirigerer…');
-            setTimeout(() => navigate('/settings?tab=inboxes', { replace: true }), 1500);
+            setMessage(isCalendarState ? 'Google Kalender er koblet til. Omdirigerer…' : 'Gmail er koblet til. Omdirigerer…');
+            setTimeout(
+              () => navigate(isCalendarState ? '/kalender' : '/settings?tab=inboxes', { replace: true }),
+              1500
+            );
           } else {
             setStatus('error');
-            setMessage(result.error || 'Kunne ikke koble til Gmail. Prøv igjen.');
+            setMessage(result.error || (isCalendarState ? 'Kunne ikke koble til Google Kalender. Prøv igjen.' : 'Kunne ikke koble til Gmail. Prøv igjen.'));
           }
         })
         .catch((e) => {
+          clearTimeout(watchdog);
           if (cancelled) return;
           setStatus('error');
           setMessage(e?.message || 'Noe gikk galt. Gå til innstillinger og prøv igjen.');
@@ -79,15 +111,18 @@ export function OAuthCallbackPage() {
 
     return () => {
       cancelled = true;
+      clearTimeout(watchdog);
     };
-  }, [searchParams, handleOAuthCallback, navigate]);
+  }, [searchParams, navigate, setCurrentTenantId]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
       <div className="w-full max-w-sm rounded-xl border border-slate-200 bg-white p-6 shadow-sm text-center">
-        <h1 className="text-lg font-semibold text-slate-900">Gmail-tilkobling</h1>
+        <h1 className="text-lg font-semibold text-slate-900">Google-tilkobling</h1>
         {status === 'pending' && (
-          <p className="text-slate-600 mt-3">Kobler til Gmail-kontoen din…</p>
+          <p className="text-slate-600 mt-3">
+            {searchParams.get('state')?.startsWith('calendar:') ? 'Kobler til Google Kalender…' : 'Kobler til Gmail-kontoen din…'}
+          </p>
         )}
         {status === 'success' && (
           <p className="text-emerald-600 mt-3">{message}</p>

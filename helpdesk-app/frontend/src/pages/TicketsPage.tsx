@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { TicketList } from '../components/tickets/TicketList';
 import { TicketDetail } from '../components/tickets/TicketDetail';
@@ -6,6 +6,8 @@ import { useTickets, type AssignmentView } from '../contexts/TicketContext';
 import { useTenant } from '../contexts/TenantContext';
 import { supabase } from '../services/supabase';
 import { sendGmailForward } from '../services/api';
+import { useCurrentUserRole } from '../hooks/useCurrentUserRole';
+import { isAgent } from '../types/roles';
 import { List } from 'lucide-react';
 
 const VIEWS: { view: AssignmentView; label: string }[] = [
@@ -16,6 +18,8 @@ const VIEWS: { view: AssignmentView; label: string }[] = [
   { view: 'closed', label: 'Lukket' },
   { view: 'archived', label: 'Arkivert' },
 ];
+
+const AGENT_ALLOWED_VIEWS = new Set<AssignmentView>(['mine', 'team']);
 
 const VIEW_LABELS: Record<AssignmentView, string> = {
   all: 'Alle åpne saker',
@@ -29,6 +33,12 @@ const VIEW_LABELS: Record<AssignmentView, string> = {
 export function TicketsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { currentTenantId } = useTenant();
+  const { role } = useCurrentUserRole();
+  const agentScoped = isAgent(role);
+  const tabViews = useMemo(
+    () => (agentScoped ? VIEWS.filter((v) => AGENT_ALLOWED_VIEWS.has(v.view)) : VIEWS),
+    [agentScoped]
+  );
   const { createTicket, selectTicket, selectedTicket, assignmentView, setAssignmentView, tickets, viewCounts } = useTickets();
   const [showNew, setShowNew] = useState(false);
   const [subject, setSubject] = useState('');
@@ -42,17 +52,20 @@ export function TicketsPage() {
   /** On small screens: when a ticket is selected, list is hidden by default; toggle opens overlay. */
   const [listOverlayOpen, setListOverlayOpen] = useState(false);
 
-  // Sync view from URL on mount / when navigating from notification link (e.g. /tickets?view=all&select=id)
+  // Sync view from URL; agents only use Mine + Team (team-scoped saker).
   useEffect(() => {
-    const view = (urlView && VIEW_LABELS[urlView as AssignmentView] ? urlView : 'mine') as AssignmentView;
+    if (role == null) return;
+    let view = (urlView && VIEW_LABELS[urlView as AssignmentView] ? urlView : 'mine') as AssignmentView;
+    if (agentScoped && !AGENT_ALLOWED_VIEWS.has(view)) {
+      view = 'mine';
+    }
     setAssignmentView(view);
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      if (!next.has('view')) next.set('view', view);
+      next.set('view', view);
       return next;
     }, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [role, agentScoped, urlView, setAssignmentView, setSearchParams]);
 
   useEffect(() => {
     if (!selectId || tickets.length === 0) return;
@@ -199,7 +212,7 @@ export function TicketsPage() {
       )}
 
       <div className="shrink-0 flex gap-1 px-3 py-2 rounded-xl border border-[var(--hiver-border)] bg-[var(--hiver-panel-bg)] w-fit shadow-[var(--hiver-shadow)]">
-        {VIEWS.map(({ view, label }) => (
+        {tabViews.map(({ view, label }) => (
           <button
             key={view}
             type="button"

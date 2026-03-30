@@ -53,6 +53,45 @@ export function extractMentionedUserIds(content: string): string[] {
   return ids;
 }
 
+type MentionMember = { user_id: string; name: string };
+
+function resolveMentionName(
+  namePart: string,
+  members: Array<MentionMember & { lower: string }>
+): MentionMember | null {
+  const q = namePart.trim().toLowerCase();
+  if (!q) return null;
+  const exact = members.filter((m) => m.lower === q);
+  if (exact.length === 1) return exact[0];
+  const starts = members.filter((m) => m.lower.startsWith(q));
+  if (starts.length === 1) return starts[0];
+  const firstToken = q.split(/\s+/)[0];
+  const oneWord = members.filter((m) => m.lower.startsWith(firstToken));
+  if (oneWord.length === 1) return oneWord[0];
+  return null;
+}
+
+/**
+ * Converts plain @Name or @Fornavn Etternavn (after whitespace or line start) into @[Name](user_id)
+ * when the name matches exactly one active team member. Skips existing @[...](uuid) tokens.
+ */
+export function linkifyLooseMentions(text: string, members: MentionMember[]): string {
+  if (!text || members.length === 0) return text;
+  const normalized = members
+    .filter((m) => m.user_id && m.name?.trim())
+    .map((m) => ({
+      user_id: m.user_id,
+      name: m.name.trim(),
+      lower: m.name.trim().toLowerCase(),
+    }));
+  if (normalized.length === 0) return text;
+  return text.replace(/(^|[\s\n])@(?!\[)(\S+(?:\s+\S+)?)/g, (full, prefix: string, namePart: string) => {
+    const resolved = resolveMentionName(namePart, normalized);
+    if (!resolved) return full;
+    return `${prefix}@[${resolved.name}](${resolved.user_id})`;
+  });
+}
+
 /** Replace @[Name](user_id) with plain @Name (e.g. for email body to customer). */
 export function mentionsToPlainNames(text: string): string {
   if (!text || typeof text !== 'string') return text;

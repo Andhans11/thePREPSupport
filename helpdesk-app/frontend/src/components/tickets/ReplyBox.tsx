@@ -7,7 +7,7 @@ import { useTickets } from '../../contexts/TicketContext';
 import { sendGmailReply, type EmailAttachment } from '../../services/api';
 import { supabase } from '../../services/supabase';
 import { compileTemplate } from '../../utils/templateHandlebars';
-import { extractMentionedUserIds, mentionsToPlainNames } from '../../utils/sanitizeHtml';
+import { extractMentionedUserIds, linkifyLooseMentions, mentionsToPlainNames } from '../../utils/sanitizeHtml';
 import type { Message } from '../../types/message';
 
 interface MentionMember {
@@ -395,8 +395,9 @@ export function ReplyBox({
 
   const handleSend = async () => {
     const raw = editorRef.current?.innerHTML ?? content;
-    const trimmed = (raw.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '') || '').trim();
-    if (!trimmed || !user?.email) return;
+    const trimmedPlain = (raw.replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '') || '').trim();
+    const trimmed = linkifyLooseMentions(trimmedPlain, mentionMembers);
+    if (!trimmedPlain || !user?.email) return;
     setError(null);
     setSending(true);
 

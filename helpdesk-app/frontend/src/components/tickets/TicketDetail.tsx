@@ -5,7 +5,7 @@ import { useTenant } from '../../contexts/TenantContext';
 import { useMasterData } from '../../contexts/MasterDataContext';
 import { useGmail } from '../../contexts/GmailContext';
 import { supabase } from '../../services/supabase';
-import { getMessageDisplayHtml } from '../../utils/sanitizeHtml';
+import { extractMentionedUserIds, getMessageDisplayHtml, linkifyLooseMentions } from '../../utils/sanitizeHtml';
 import { StatusBadge } from './StatusBadge';
 import { TicketMessage } from './TicketMessage';
 import { ReplyBox } from './ReplyBox';
@@ -55,17 +55,6 @@ interface TeamOption {
 interface MentionMember {
   user_id: string;
   name: string;
-}
-
-/** Extract unique user IDs from note content with @[Name](user_id) mentions */
-function extractMentionedUserIds(content: string): string[] {
-  const re = /@\[[^\]]*\]\(([a-f0-9-]{36})\)/gi;
-  const ids: string[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(content)) !== null) {
-    if (m[1] && !ids.includes(m[1])) ids.push(m[1]);
-  }
-  return ids;
 }
 
 interface TicketDetailProps {
@@ -175,10 +164,11 @@ export function TicketDetail({ onRequestClose }: TicketDetailProps = {}) {
   const categoryColor = categoryRow?.color_hex ?? '#6b7280';
 
   const handleSaveInternalNote = async () => {
-    const text = newNoteContent.trim();
-    if (!text || !user?.email || !selectedTicket) return;
+    const raw = newNoteContent.trim();
+    if (!raw || !user?.email || !selectedTicket) return;
     setSavingNote(true);
     try {
+      const text = linkifyLooseMentions(raw, mentionMembers);
       const mentioned_user_ids = extractMentionedUserIds(text);
       await addMessage({
         ticket_id: selectedTicket.id,

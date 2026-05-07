@@ -143,6 +143,20 @@ serve(async (req) => {
     });
   }
 
+  if (notificationId) {
+    const { data: existing } = await serviceSupabase
+      .from('notifications')
+      .select('email_sent_at')
+      .eq('id', notificationId)
+      .maybeSingle();
+    if ((existing as { email_sent_at?: string | null } | null)?.email_sent_at) {
+      return new Response(
+        JSON.stringify({ success: true, sent: 0, reason: 'already_sent', notification_id: notificationId }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+  }
+
   const { data: member, error: memberErr } = await serviceSupabase
     .from('team_members')
     .select('id, email, email_on_notifications')
@@ -234,6 +248,14 @@ serve(async (req) => {
       JSON.stringify({ error: 'Failed to send email' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
+  }
+
+  if (notificationId) {
+    await serviceSupabase
+      .from('notifications')
+      .update({ email_sent_at: new Date().toISOString() })
+      .eq('id', notificationId)
+      .is('email_sent_at', null);
   }
 
   return new Response(

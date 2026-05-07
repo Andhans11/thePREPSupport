@@ -81,6 +81,33 @@ export function TicketsPage() {
   }, [selectId, tickets, selectTicket, setSearchParams]);
 
   useEffect(() => {
+    if (!selectId) return;
+    if (tickets.some((t) => t.id === selectId)) return;
+    let cancelled = false;
+
+    async function fetchSelectedTicket() {
+      const { data } = await supabase
+        .from('tickets')
+        .select('id, ticket_number, customer_id, subject, status, priority, category, assigned_to, team_id, gmail_thread_id, gmail_message_id, tags, due_date, resolved_at, first_response_at, created_at, updated_at, customer:customers(email, name), team:teams(id, name)')
+        .eq('id', selectId)
+        .maybeSingle();
+
+      if (cancelled || !data) return;
+      selectTicket(data as Parameters<typeof selectTicket>[0]);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('select');
+        return next;
+      }, { replace: true });
+    }
+
+    fetchSelectedTicket();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectId, tickets, selectTicket, setSearchParams]);
+
+  useEffect(() => {
     if (openNew) {
       setShowNew(true);
       setSearchParams((prev) => {

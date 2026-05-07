@@ -46,22 +46,26 @@ function buildNotificationEmail(params: {
   const { fromHeader, to, subjectEncoded, title, bodyText, ticketLink } = params;
   const boundary = 'np_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
   const plain = [title, bodyText ? '\n' + bodyText : '', '', `Åpne i appen: ${ticketLink}`].join('\n').trim();
+  const escapedTitle = escapeHtml(title);
+  const escapedBody = bodyText ? escapeHtml(bodyText) : '';
+  const escapedLink = escapeHtml(ticketLink);
   const html = `<!DOCTYPE html>
 <html lang="no">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen-Sans,Ubuntu,sans-serif;background-color:#f4f4f5;color:#1f2937;">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;padding:32px 16px;">
+<body style="margin:0;padding:0;font-family:'DM Sans',-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background-color:#f8f8f8;color:#333333;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f8f8f8;padding:32px 16px;">
     <tr><td align="center">
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:560px;background:#ffffff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,0.08);overflow:hidden;">
-        <tr><td style="background:linear-gradient(135deg,#2563eb 0%,#1d4ed8 100%);padding:24px 28px;">
-          <span style="font-size:18px;font-weight:600;color:#ffffff;letter-spacing:-0.02em;">thePREP Support</span>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:580px;background:#ffffff;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.06);overflow:hidden;border:1px solid #e8e6e8;">
+        <tr><td style="background:linear-gradient(135deg,#9b7b9e 0%,#8a6a8d 100%);padding:22px 28px;">
+          <span style="font-size:30px;font-weight:700;color:#ffffff;letter-spacing:-0.02em;">thePREP</span>
+          <span style="font-size:30px;font-weight:700;color:#ffffff;letter-spacing:-0.02em;"> Support</span>
         </td></tr>
-        <tr><td style="padding:28px;">
-          <h1 style="margin:0 0 16px;font-size:20px;font-weight:600;color:#111827;line-height:1.3;">${escapeHtml(title)}</h1>
-          ${bodyText ? `<div style="font-size:15px;line-height:1.6;color:#4b5563;margin-bottom:24px;">${escapeHtml(bodyText)}</div>` : ''}
-          <a href="${escapeHtml(ticketLink)}" style="display:inline-block;padding:12px 24px;background:#2563eb;color:#ffffff!important;text-decoration:none;font-size:15px;font-weight:500;border-radius:8px;">Åpne i appen</a>
+        <tr><td style="padding:28px;background:#ffffff;">
+          <h1 style="margin:0 0 14px;font-size:20px;font-weight:700;color:#333333;line-height:1.2;letter-spacing:-0.02em;">${escapedTitle}</h1>
+          ${escapedBody ? `<div style="white-space:pre-line;font-size:15px;line-height:1.55;color:#6b6b6b;margin-bottom:26px;">${escapedBody}</div>` : ''}
+          <a href="${escapedLink}" style="display:inline-block;padding:12px 22px;background:#9b7b9e;color:#ffffff!important;text-decoration:none;font-size:15px;font-weight:700;border-radius:10px;">Åpne i appen</a>
         </td></tr>
-        <tr><td style="padding:16px 28px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af;">
+        <tr><td style="padding:16px 28px;border-top:1px solid #e8e6e8;font-size:13px;color:#8a8a8a;background:#f8f8f8;">
           Denne e-posten ble sendt fra thePREP Support. Du kan styre varsler under Innstillinger → Brukere.
         </td></tr>
       </table>

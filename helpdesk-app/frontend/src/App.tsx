@@ -1,4 +1,4 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { TenantProvider } from './contexts/TenantContext';
 import { ToastProvider } from './contexts/ToastContext';
@@ -35,6 +35,7 @@ import { isAgent } from './types/roles';
 
 function HomeOrLanding() {
   const { user, loading } = useAuth();
+  const location = useLocation();
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#f8fafc]">
@@ -43,6 +44,10 @@ function HomeOrLanding() {
     );
   }
   if (!user) {
+    if (location.pathname !== '/') {
+      const redirect = `${location.pathname}${location.search}${location.hash}`;
+      return <Navigate to={`/login?redirect=${encodeURIComponent(redirect)}`} replace />;
+    }
     return <LandingPage />;
   }
   return <Layout />;

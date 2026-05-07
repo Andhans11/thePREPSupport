@@ -93,7 +93,7 @@ export function TicketsPage() {
         .maybeSingle();
 
       if (cancelled || !data) return;
-      selectTicket(data as Parameters<typeof selectTicket>[0]);
+      selectTicket(data as unknown as Parameters<typeof selectTicket>[0]);
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.delete('select');
